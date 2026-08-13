@@ -303,3 +303,78 @@ test('buildContext hedeflerin toplamini ayin toplamina esitler', () => {
     assert.ok(Math.abs(sum - built.totals[key]) < 1e-6, `${key}: ${sum} != ${built.totals[key]}`);
   }
 });
+
+test('nobet sayilari teorik minimum yayilimda kalir (taban/tavan disina cikilmaz)', () => {
+  // 62 nobet 8 doktora bolunmuyorsa kimse 7 veya 8 disinda bir sayi almamali.
+  // Bu, yumusak bir tercih degil sert bir sinirdir.
+  for (const n of [4, 5, 6, 7, 8, 9, 10, 12]) {
+    const doctors = makeDoctors(n);
+    const ids = Object.keys(doctors);
+    const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+
+    assert.equal(out.report.unassigned.length, 0, `${n} doktor: bos slot`);
+    assert.deepEqual(out.warnings.filter((w) => w.level !== 'info'), [], `${n} doktor: uyari var`);
+
+    const beklenen = out.slots.length / n;
+    const taban = Math.floor(beklenen + 1e-9);
+    const tavan = Math.ceil(beklenen - 1e-9);
+    for (const row of out.report.rows) {
+      assert.ok(
+        row.shifts >= taban && row.shifts <= tavan,
+        `${n} doktor / ${row.doctorId}: ${row.shifts} nobet (izinli ${taban}–${tavan})`,
+      );
+    }
+  }
+});
+
+test('toplam saatler hedefe cok yakin kalir', () => {
+  // Kategoriler tek tek dengelense bile sapmalar ayni doktorda birikebilir;
+  // toplam saat terimi bunu engellemeli.
+  const doctors = makeDoctors(8);
+  const ids = Object.keys(doctors);
+  const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+
+  const fark = out.report.rows.map((r) => r.totalHours - r.targetTotalHours);
+  const yayilim = Math.max(...fark) - Math.min(...fark);
+  assert.ok(yayilim <= 2, `toplam saat yayilimi ${yayilim.toFixed(2)} sa`);
+  for (const f of fark) assert.ok(Math.abs(f) <= 1.5, `bir doktor hedeften ${f.toFixed(2)} sa sapmis`);
+});
+
+test('yarim zamanli ve ay ortasi katilan/ayrilan kadroda da sinirlar tutar', () => {
+  const doctors = makeDoctors(8);
+  const ids = Object.keys(doctors);
+  const month = makeMonth('2026-08', ids);
+  month.participants[0] = { doctorId: 'd01', active: true, to: '2026-08-15', loadFactor: 1 };
+  month.participants[1] = { doctorId: 'd02', active: true, from: '2026-08-20', loadFactor: 1 };
+  month.participants[4] = { doctorId: 'd05', active: true, loadFactor: 0.5 };
+  month.preferences = { d03: { '2026-08-05': 'off', '2026-08-06': 'off', '2026-08-07': 'off' } };
+
+  const out = generateSchedule({ month, doctors, settings });
+  assert.equal(out.report.unassigned.length, 0);
+  assert.deepEqual(out.warnings.filter((w) => w.level !== 'info'), []);
+
+  for (const row of out.report.rows) {
+    const taban = Math.floor(row.expectedShifts + 1e-9);
+    const tavan = Math.ceil(row.expectedShifts - 1e-9);
+    assert.ok(
+      row.shifts >= taban && row.shifts <= tavan,
+      `${row.doctorId}: ${row.shifts} nobet (beklenen ${row.expectedShifts.toFixed(2)}, izinli ${taban}–${tavan})`,
+    );
+    assert.ok(
+      Math.abs(row.totalHours - row.targetTotalHours) <= 2,
+      `${row.doctorId}: hedeften ${(row.totalHours - row.targetTotalHours).toFixed(2)} sa sapma`,
+    );
+  }
+});
+
+test('uyarilar teslim edilen cizelgeyi yansitir', () => {
+  // Acgozlu asamada gevsetilen ama sonradan onarilan kurallar uyari
+  // olarak kalmamali; aksi halde temiz cizelge kirli gorunur.
+  const doctors = makeDoctors(8);
+  const ids = Object.keys(doctors);
+  const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+
+  const uyarilar = out.warnings.filter((w) => w.level !== 'info');
+  assert.deepEqual(out.report.issues, [], 'gercek kural ihlali var');
+  assert.deepEqual(uyarilar, [], 'ihlal yokken uyari uretilmis');
+});

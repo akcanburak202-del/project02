@@ -32,6 +32,11 @@ export const DEFAULT_WEIGHTS = {
   fairness: 1,
   categoryWeights: { wdSolo: 1, wdShared: 1, weSolo: 1.4, weShared: 1.4 },
   shiftCount: 2,
+  // Kategoriler tek tek dengelense bile sapmalar ayni doktorda ayni yonde
+  // birikebilir; bu terim dogrudan TOPLAM saati hedefe cekerek bunu onler.
+  totalHours: 2,
+  // Nobet sayisi tavani sert kuraldir; taban altina inmek agir cezalidir.
+  shiftCountFloor: 80,
   nightCount: 1,
   weekendCount: 1.5,
   avoidDay: 40,
@@ -161,13 +166,26 @@ export function prepare({
     expWeekend[d] = weekendSlots * share;
   });
 
+  // --- Nobet sayisi siniri ---
+  // 62 nobet 8 doktora bolunmuyorsa kimse 7 veya 8'den baska bir sayi
+  // almamali. Beklenen degerin tavani SERT sinir olarak uygulanir; boylece
+  // "birine 9 nobet" gibi sonuclar yapisal olarak imkansizlasir.
+  const countCap = new Float64Array(nDoctors);
+  const countFloor = new Float64Array(nDoctors);
+  const EPS = 1e-9;
+  doctorIds.forEach((id, d) => {
+    countCap[d] = Math.ceil(expShifts[d] - EPS);
+    countFloor[d] = Math.floor(expShifts[d] + EPS);
+  });
+
   const maxShifts = new Float64Array(nDoctors);
   active.forEach((p, d) => {
     const own = Number(p.maxShifts);
     const global = Number(R.maxShiftsPerMonth);
-    if (Number.isFinite(own) && own > 0) maxShifts[d] = own;
-    else if (Number.isFinite(global) && global > 0) maxShifts[d] = global;
-    else maxShifts[d] = Infinity;
+    let cap = countCap[d];
+    if (Number.isFinite(own) && own > 0) cap = Math.min(cap, own);
+    else if (Number.isFinite(global) && global > 0) cap = Math.min(cap, global);
+    maxShifts[d] = cap;
   });
 
   // --- Sert kural on-hesabi: musaitlik / gorev bitisi ---
@@ -248,7 +266,7 @@ export function prepare({
     slots, days, totals, participants: active, doctorIds, doctorsById, indexById,
     nDoctors, nSlots, totalDays,
     slotStart, slotEnd, slotDay, slotIsNight, slotIsWeekend, slotCat, slotIndexById, dayIndexByIso,
-    targets, expShifts, expNight, expWeekend, maxShifts,
+    targets, expShifts, expNight, expWeekend, maxShifts, countCap, countFloor,
     staticOk, staticReasonCode, prefCost, wantHit, wantTotal,
     carryByDoctor, minRestMin, maxConsecutive, catW,
     eligibility, availSets,
@@ -481,6 +499,18 @@ export function doctorCost(ctx, state, d) {
   const dn = night - ctx.expNight[d];
   const dw = weekend - ctx.expWeekend[d];
   cost += W.shiftCount * ds * ds + W.nightCount * dn * dn + W.weekendCount * dw * dw;
+
+  // Toplam saat: kategori sapmalari ayni yonde birikmesin
+  const dt = (c0 + c1 + c2 + c3)
+    - (ctx.targets[t] + ctx.targets[t + 1] + ctx.targets[t + 2] + ctx.targets[t + 3]);
+  cost += W.totalHours * dt * dt;
+
+  // Beklenen nobet sayisinin tabani altina inmek agir cezali
+  if (n < ctx.countFloor[d]) {
+    const eksik = ctx.countFloor[d] - n;
+    cost += W.shiftCountFloor * eksik * eksik;
+  }
+
   cost += pref;
 
   // Nobetlerin aya yayilmasi: cok yakin tarihler cezalandirilir.
@@ -771,7 +801,6 @@ export function solve(ctx, options = {}) {
 
   let best = null;
   let bestCost = Infinity;
-  let bestWarnings = [];
   let bestPlan = null;
 
   const restarts = Math.max(1, opt.restarts | 0);
@@ -784,13 +813,16 @@ export function solve(ctx, options = {}) {
     }
     const state = createState(ctx);
     for (const [si, d] of fixedPairs) place(ctx, state, si, d);
-    const warnings = greedyFill(ctx, state, rng, movable);
+    // Acgozlu asamada gevsetilen kurallar cogunlukla tavlama sirasinda
+    // onarilir; bu yuzden uyarilar oradan degil, TESLIM EDILEN cozumden
+    // uretilir (asagidaki auditState). Aksi halde temiz bir cizelge icin
+    // gecersiz uyarilar gosterilirdi.
+    greedyFill(ctx, state, rng, movable);
     anneal(ctx, state, rng, movable, opt);
     const cost = ctx.planCost(state);
     if (cost < bestCost) {
       bestCost = cost;
       best = state;
-      bestWarnings = warnings;
       bestPlan = ctx.plan ? clonePlan(ctx.plan) : null;
     }
   }
@@ -811,7 +843,15 @@ export function solve(ctx, options = {}) {
     assignments[ctx.slots[si].id] = d >= 0 ? ctx.doctorIds[d] : null;
   }
 
-  const finalWarnings = [...fixedWarnings, ...bestWarnings, ...auditState(ctx, best, fixedSlots)];
+  const finalWarnings = [...fixedWarnings, ...auditState(ctx, best, fixedSlots)];
+  for (let si = 0; si < ctx.nSlots; si += 1) {
+    if (best.assign[si] >= 0) continue;
+    finalWarnings.push({
+      level: 'error',
+      slotId: ctx.slots[si].id,
+      message: `${ctx.slots[si].date} ${ctx.slots[si].label}: atanabilecek müsait doktor yok.`,
+    });
+  }
   return { assignments, cost: bestCost, warnings: dedupeWarnings(finalWarnings), seed };
 }
 

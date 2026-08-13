@@ -36,7 +36,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 53 test: motor, saat planı, kurallar, adalet ve uçtan uca API
+npm test                      # 57 test: motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -137,10 +137,11 @@ gerektiği kadar** sapar.
 
 | | Sabit saatler | Saatleri araç belirler |
 |---|---|---|
-| Ortalama mutlak sapma | 2,51 sa | **0,41 sa** |
+| Ortalama mutlak sapma | 2,51 sa | **0,42 sa** |
 | Hafta içi paylaşımlı yayılım | 9,0 sa | **1,0 sa** |
-| Hafta sonu paylaşımlı yayılım | 9,0 sa | **2,5 sa** |
-| Üretim süresi | 0,1 sn | 1,6 sn |
+| Toplam saat yayılımı | 9,0 sa | **0,5 sa** |
+| Nöbet sayıları | 7–9 | **7–8** (teorik minimum) |
+| Üretim süresi | 0,1 sn | 1,9 sn |
 
 ### Model
 
@@ -177,6 +178,60 @@ planı sıfırlanır ve yeniden üretim beklenir.
 
 ---
 
+## Nöbet sayıları ve kalan denge açıkları
+
+### Nöbet sayısı
+
+Ayın nöbet sayısı doktor sayısına tam bölünmüyorsa **tam eşitlik mümkün
+değildir**: 62 nöbet / 8 doktor = 7,75. Bir nöbet ikiye bölünemez, yani
+kimileri 7 kimileri 8 nöbet tutacaktır.
+
+Yapılabilecek en iyi şey, kimsenin bu iki değerin dışına çıkmamasıdır ve araç
+bunu **sert kural** olarak uygular: her doktorun nöbet sayısı, kendi beklenen
+payının tabanı ile tavanı arasında kalmak zorundadır. "Birine 9, ötekine 6"
+gibi sonuçlar yapısal olarak imkânsızdır.
+
+| Doktor | Nöbet sayıları | Teorik olarak mümkün olan |
+|---|---|---|
+| 4 | 15, 15, 16, 16 | 15/16 |
+| 6 | 10, 10, 10, 10, 11, 11 | 10/11 |
+| 8 | 7, 7, 8, 8, 8, 8, 8, 8 | 7/8 |
+| 10 | 6×8, 7, 7 | 6/7 |
+| 12 | 5×10, 6, 6 | 5/6 |
+
+Yarım zamanlı ve ay ortasında katılan/ayrılan doktorlarda da aynı kural
+işler: pay orantılı hesaplanır, sınır o payın tabanı/tavanı olur.
+
+### Toplam saat
+
+Nöbet sayısı eşitlenemese bile **saatler eşitlenebilir** — çünkü giriş/çıkış
+saatleri esnektir. 7 nöbet tutan doktora biraz uzun, 8 nöbet tutana biraz
+kısa vardiyalar denk getirilerek toplam saat hedefe oturtulur.
+
+8 doktorlu Ağustos 2026'da sonuç: herkes **122,5–123 saat** (hedef 122,9).
+Yayılım 0,5 saat.
+
+### Neden tam sıfır değil
+
+Üç yapısal sınır kalıyor:
+
+1. **Zaman ızgarası.** Saatler 30 dakikalık adımlarla seçilir, dolayısıyla en
+   küçük ayar birimi yarım saattir. *Ayarlar → Saat adımı*'nı 15 dakikaya
+   çekerek yarıya indirebilirsiniz.
+2. **Saat değişkenleri iki doktoru birden etkiler.** Sabah devrini bir yarım
+   saat öteye almak, gece nöbetçisinin mesaisini uzatırken gündüz
+   nöbetçisininkini kısaltır. Yani bir kişinin açığını kapatmak her zaman
+   başka birinin dengesini oynatır; sistem sıfır toplamlıdır.
+3. **Tercih edilen saatlerden sapma bedeli.** Varsayılan "ölçülü" ayarında
+   araç, eşitlik uğruna saatleri sınırsız oynatmaz; öngörülebilirlik ile
+   eşitlik arasında denge kurar. *Saat esnekliği: Serbest* seçilirse açık
+   daha da kapanır, karşılığında saatler gün gün daha çok değişir.
+
+Kalan yarım saatlik farklar da kaybolmaz: ay kesinleştirildiğinde **devir
+defterine** yazılır ve sonraki ayın hedefleri ters yönde kaydırılarak kapatılır.
+
+---
+
 ## Çizelge oluşturulurken uyulan kurallar
 
 ### Asla çiğnenmeyen (sert) kurallar
@@ -186,15 +241,17 @@ planı sıfırlanır ve yeniden üretim beklenir.
 2. **Görev tarihleri dışına nöbet yazılmaz.** Gece nöbeti ertesi sabaha
    taştığı için, görev bitiş gününde gece nöbeti verilmez.
 3. **Aynı gün iki vardiya verilmez.**
-4. **Üst üste iki gün nöbet verilmez** — iki nöbet arasında en az bir tam
+4. **Nöbet sayısı, beklenen payın tabanı ile tavanı arasında kalır** — kimse
+   ortalamanın bir nöbetten fazla üstüne veya altına inemez.
+5. **Üst üste iki gün nöbet verilmez** — iki nöbet arasında en az bir tam
    gün boş kalır. *(Ayarlanabilir: `Üst üste en fazla kaç gün nöbet`,
    varsayılan 1. Bunu 2 yaparsanız ardışık nöbete izin verilir.)*
-5. **İki nöbet arası en az 12 saat dinlenme** bırakılır. Önceki aydan
+6. **İki nöbet arası en az 12 saat dinlenme** bırakılır. Önceki aydan
    devreden gece nöbeti de hesaba katılır, yani ayın 1'i planlanırken
    bir önceki ayın son gecesi bilinir. *(Ayarlanabilir.)*
-6. **Aylık nöbet üst sınırı** aşılmaz (genel ayardan ya da kişi bazında
+7. **Aylık nöbet üst sınırı** aşılmaz (genel ayardan ya da kişi bazında
    Katılım ekranından verilebilir).
-7. **Günün 24 saati boşluksuz kapsanır**, hiçbir nöbet boş bırakılmaz.
+8. **Günün 24 saati boşluksuz kapsanır**, hiçbir nöbet boş bırakılmaz.
 
 Kadro bu kurallar için fazla darsa çizelge yine üretilir; ancak dinlenme veya
 üst üste gün kuralı gevşetilen her nöbet **uyarı olarak bildirilir** —
@@ -207,6 +264,8 @@ sessizce çiğnenmez. Boş kalan slot da kırmızı uyarı olarak görünür.
 
 - Dört etiketin hedeften sapması (kareli ceza — büyük sapmalar çok daha
   ağır cezalandırılır)
+- **Toplam saatin** hedeften sapması — dört kategori tek tek dengeli olsa bile
+  sapmalar aynı doktorda aynı yönde birikebildiği için ayrıca gözetilir
 - Nöbet, gece ve hafta sonu **sayılarının** dengesi
 - "İstemiyorum" günlerinden kaçınmak, "istiyorum" günlerini tercih etmek
 - Nöbetlerin aya dengeli yayılması (birbirine yakın nöbetler cezalandırılır)
@@ -362,5 +421,5 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            53 test — motor, saat planı, kurallar, adalet ve uçtan uca API
+test/            57 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
