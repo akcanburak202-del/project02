@@ -160,7 +160,15 @@ ${code}
 const boot = `
 // Demo arka ucunu arayuzden once devreye al
 const __demo = __req('public/js/demo-api.js');
-window.__NOBET_BACKEND__ = (method, path, payload) => __demo.demoRequest(method, path, payload);
+// Demo arka ucu ayni is parcaciginda calisir; agir istekler (orn. desen
+// aramasi birkac saniye surer) sayfayi kilitler. Isten once iki kare
+// kadar bekleyerek mesgul gostergesinin cizilmesine izin veriyoruz — is yine
+// bloklar ama kullanici donmus bir ekranla karsilasmaz.
+// (rAF yerine setTimeout: arka plan sekmesinde de kesin calisir.)
+window.__NOBET_BACKEND__ = async (method, path, payload) => {
+  await new Promise((r) => setTimeout(r, 32));
+  return __demo.demoRequest(method, path, payload);
+};
 window.__NOBET_RESET__ = () => { __demo.resetDemo(); location.reload(); };
 __req('public/js/app.js');
 `;

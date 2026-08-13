@@ -19,6 +19,7 @@ import {
 } from '../../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../../engine/slots.js';
 import { candidatesForSlot, checkSwap } from '../../engine/scheduler.js';
+import { proposeDayPatterns } from '../../engine/propose.js';
 import { applyPreferenceUpdate } from '../../engine/policy.js';
 import { monthId as makeMonthId } from '../../engine/calendar.js';
 
@@ -621,6 +622,75 @@ route('POST', '/api/months/:id/day-pattern', ({ body, params }) => {
     if (valid.has(slotId)) next[slotId] = doctorId;
   }
   month.assignments = next;
+  month.pinned = (month.pinned || []).filter((id) => valid.has(id));
+  month.plan = null;
+  save();
+  return monthWorkspace(d, month.id);
+});
+
+/** Gun deseni onerisi — hicbir sey degistirmez, karsilastirma dondurur. */
+route('POST', '/api/months/:id/propose-patterns', ({ body, params }) => {
+  requireAdmin();
+  const d = load();
+  const { month, settings, ledger, carryOver, built } = buildMonthContext(d, params.id);
+  assertEditable(month);
+
+  const clampCount = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 1 && n <= 6 ? Math.round(n) : fallback;
+  };
+  const min = clampCount(body?.minDoctors, 2);
+  const max = Math.max(min, clampCount(body?.maxDoctors, 3));
+
+  const proposal = proposeDayPatterns(
+    { month, doctors: doctorsMap(d), settings, ledger, carryOver },
+    {
+      built,
+      minDoctors: min,
+      maxDoctors: max,
+      keepManual: body?.keepManual !== false,
+      // Tarayicida arama tek is parcaciginda calisir; sayfayi kilitlememek icin
+      // eleme asamasi daha kisa tutulur.
+      screenIterations: 1200,
+      finalIterations: 20000,
+    },
+  );
+  return { proposal, limits: { minDoctors: min, maxDoctors: max } };
+});
+
+/** Onerilen gun deseni haritasini toptan uygular. */
+route('POST', '/api/months/:id/apply-patterns', ({ body, params }) => {
+  requireAdmin();
+  const d = load();
+  const month = getMonth(d, params.id);
+  assertEditable(month);
+  const policy = resolveSettings(getSettings(d), month.settings || {}).shiftPolicy;
+  if (policy.mode !== 'flexible') throw bad('Gün deseni yalnızca esnek modda seçilebilir.');
+  const dayPatterns = body?.dayPatterns;
+  if (!dayPatterns || typeof dayPatterns !== 'object') throw bad('Gün deseni haritası gerekli.');
+
+  const next = {};
+  for (const [date, patternId] of Object.entries(dayPatterns)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const pattern = policy.patternById.get(patternId);
+    if (!pattern?.enabled) throw bad(`Bilinmeyen veya kapalı gün deseni: ${patternId}`);
+    // Dondurulmus gunlerde acik secim yoksa varsayilan desen gecerlidir;
+    // haritaya deger yazmak o gunu degistirirdi.
+    if (month.lockedThrough && date <= month.lockedThrough) continue;
+    next[date] = patternId;
+  }
+  for (const [date, patternId] of Object.entries(month.dayPatterns || {})) {
+    if (month.lockedThrough && date <= month.lockedThrough) next[date] = patternId;
+  }
+  month.dayPatterns = next;
+
+  const built = buildMonthContext(d, month.id).built;
+  const valid = new Set(built.slots.map((s) => s.id));
+  const kept = {};
+  for (const [slotId, doctorId] of Object.entries(month.assignments || {})) {
+    if (valid.has(slotId)) kept[slotId] = doctorId;
+  }
+  month.assignments = kept;
   month.pinned = (month.pinned || []).filter((id) => valid.has(id));
   month.plan = null;
   save();

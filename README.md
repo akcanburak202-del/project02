@@ -256,6 +256,48 @@ dağılımıyla birlikte gösterilir — seçmeden önce sonucu görürsünüz.
 > saatlik tek parça iş yükü bölünemez. Karışık desenli bir ayda fiilî mesai
 > yayılımı 0 yerine 2–3 saate çıkabilir; fark yine devir defterine yazılır.
 
+### Desen öner — araç arar, siz karar verirsiniz
+
+Desenleri tek tek denemek yerine araç kombinasyonları kendisi tarayabilir:
+çizelge ekranında **"Desen öner"**.
+
+Bunun somut bir faydası var. Desen seçimi ayın **toplam nöbet sayısını**
+değiştirir, bu da nöbetlerin doktorlara tam bölünüp bölünmediğini belirler.
+8 doktor, Ağustos 2026 ölçümü:
+
+| Yapılandırma | Nöbet | Kişi başı | Nöbet dağılımı | Fiilî fark |
+|---|---|---|---|---|
+| Hepsi klasik ikili | 62 | 7,75 | 7,7,8,8,8,8,8,8 | 0,50 sa |
+| 2 hafta içi günü üçlü | 64 | 8,00 | **herkes 8** | **0,25 sa** |
+
+Elle bulunması zor, savunması kolay bir kazanç: iki günün düzenini değiştirmek
+nöbet sayısını herkeste eşitliyor.
+
+**Ama arama serbest bırakılamaz.** İki koruma var:
+
+1. **Sınırları siz koyarsınız.** Günde en az/en çok kaç doktor bulunacağını
+   pencerede belirtirsiniz. Bu bir adalet değil, **hasta güvenliği** kararıdır
+   ve araç hasta yoğunluğunu bilmez; sınır dışına çıkan hiçbir öneri üretilmez.
+   (Sınırsız bırakılsaydı arama "6 gün tek nöbetçi" gibi çalışma koşullarını
+   ağırlaştıran çözümler de önerirdi — ölçümde fiilî fark 0'dan 1,5 saate çıktı.)
+2. **Kadro artışı bedava değildir.** Günlük toplam fiilî mesai her zaman 24
+   saattir; bir güne doktor eklemek iş yükünü azaltmaz, aynı işi daha çok
+   nöbete böler. Puanlamada kadro değişikliği "kişi başı nöbet farkı" olarak
+   cezalandırılır: nöbet sayısını tam böldüren küçük bir ekleme kazanabilir,
+   büyük bir kadro artışı kazanamaz.
+
+Ayrıca **dondurulmuş günlere ve elle desen seçtiğiniz günlere dokunulmaz**,
+ve aynı sonucu veren daha az istisnalı yapılandırma tercih edilir
+(öngörülebilirlik).
+
+Sonuç bir tabloda mevcut düzenle yan yana gösterilir: nöbet sayısı, kişi başı
+dağılım, fiilî mesai farkı, bulunma saati farkı ve uyarı sayısı. Uygulamak
+isteyip istemediğinize siz karar verirsiniz — **arama hiçbir şeyi kendiliğinden
+değiştirmez**. Uyguladıktan sonra çizelgeyi yeniden üretmeniz gerekir.
+
+Mevcut düzen zaten sınırlarınız içindeki en iyi düzense araç bunu açıkça söyler
+ve öneri üretmez.
+
 ---
 
 ## Nöbet sayıları ve kalan denge açıkları
@@ -493,6 +535,7 @@ engine/          Çizelge motoru (arayüzden ve sunucudan bağımsız, saf hesap
   slots.js       Nöbet üretimi + dört etiketli saat hesabı (sweep-line)
   shiftplan.js   Giriş/çıkış saatlerinin karar modeli (esnek vardiya düzeni)
   patterns.js    Gün desenleri — esnekliği öngörülebilir kılan kütüphane
+  propose.js     Desen arama ve önerme (uygulama kararı yöneticinin)
   fairness.js    Ağırlıklar, hedefler, devir defteri
   scheduler.js   Sert kurallar, maliyet fonksiyonu, çözücü
   policy.js      Tercih girişi yetki kuralları (izin yalnızca yöneticide)
@@ -502,5 +545,5 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            62 test — motor, saat planı, kurallar, adalet ve uçtan uca API
+test/            77 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```

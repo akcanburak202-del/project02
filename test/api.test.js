@@ -330,3 +330,72 @@ test('katilim: ayin 15inde ayrilan doktor sonrasina yazilmaz', async () => {
   assert.ok(row.totalHours > 0);
   assert.ok(row.availableDays === 15);
 });
+
+test('desen onerisi: arar, hicbir seyi degistirmez, uygulanabilir', async () => {
+  // Uclu deseni acalim ki aramanin gercek bir secenegi olsun.
+  const ws0 = (await call('GET', '/api/months/2026-09')).data;
+  const patterns = (ws0.config.shiftPolicy.patterns || []).map((p) =>
+    (p.id === 'uclu' ? { ...p, enabled: true } : p));
+  const ayar = await call('PUT', '/api/settings', { shiftPolicy: { patterns } });
+  assert.equal(ayar.status, 200, JSON.stringify(ayar.data));
+
+  const before = (await call('GET', '/api/months/2026-09')).data;
+  const res = await call('POST', '/api/months/2026-09/propose-patterns', { minDoctors: 2, maxDoctors: 3 });
+  assert.equal(res.status, 200);
+  const p = res.data.proposal;
+  assert.ok(p.searched > 0, 'aday denenmedi');
+  assert.ok(p.current.summary.slots > 0);
+
+  // Arama salt okunur olmali
+  const after = (await call('GET', '/api/months/2026-09')).data;
+  assert.deepEqual(after.dayPatterns, before.dayPatterns);
+  assert.deepEqual(after.assignments, before.assignments);
+
+  if (!p.best) return; // mevcut duzen zaten en iyiyse yapacak is yok
+
+  // Sinirlar disina cikilmamali
+  const byId = new Map((ws0.patterns || []).map((x) => [x.id, x]));
+  for (const id of Object.values(p.best.dayPatterns)) {
+    const n = byId.get(id)?.doctorsPerDay;
+    if (n !== undefined) assert.ok(n >= 2 && n <= 3, `${id}: sinir disi (${n} doktor)`);
+  }
+
+  const applied = await call('POST', '/api/months/2026-09/apply-patterns', { dayPatterns: p.best.dayPatterns });
+  assert.equal(applied.status, 200);
+  const gen = await call('POST', '/api/months/2026-09/generate', {});
+  assert.equal(gen.status, 200);
+  assert.equal(gen.data.report.unassigned.length, 0);
+  assert.equal(gen.data.slots.length, p.best.summary.slots);
+});
+
+test('desen uygulamasi dondurulmus gunlere dokunmaz', async () => {
+  const don = await call('PUT', '/api/months/2026-09/config', { lockedThrough: '2026-09-10' });
+  assert.equal(don.status, 200, JSON.stringify(don.data));
+  assert.equal(don.data.month.lockedThrough, '2026-09-10');
+  const before = (await call('GET', '/api/months/2026-09')).data;
+  const donmusDesenler = Object.fromEntries(before.days
+    .filter((d) => d.iso <= '2026-09-10')
+    .map((d) => [d.iso, d.patternId]));
+
+  // Tum aya "iki kisi tam gun" uygulamaya calisalim
+  const hepsi = Object.fromEntries(before.days.map((d) => [d.iso, 'ikili-tam']));
+  const out = await call('POST', '/api/months/2026-09/apply-patterns', { dayPatterns: hepsi });
+  assert.equal(out.status, 200);
+
+  const after = (await call('GET', '/api/months/2026-09')).data;
+  for (const d of after.days) {
+    if (d.iso <= '2026-09-10') {
+      assert.equal(d.patternId, donmusDesenler[d.iso], `${d.iso} dondurulmus olmasina ragmen degismis`);
+    } else {
+      assert.equal(d.patternId, 'ikili-tam', `${d.iso} uygulanmamis`);
+    }
+  }
+  await call('PUT', '/api/months/2026-09/config', { lockedThrough: null });
+});
+
+test('bilinmeyen veya kapali desen uygulanamaz', async () => {
+  const out = await call('POST', '/api/months/2026-09/apply-patterns', {
+    dayPatterns: { '2026-09-20': 'boyle-bir-desen-yok' },
+  });
+  assert.equal(out.status, 400);
+});

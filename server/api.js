@@ -28,6 +28,7 @@ import {
 } from '../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../engine/slots.js';
 import { candidatesForSlot, checkSwap } from '../engine/scheduler.js';
+import { proposeDayPatterns } from '../engine/propose.js';
 import { applyPreferenceUpdate } from '../engine/policy.js';
 import { addDays, monthId as makeMonthId } from '../engine/calendar.js';
 import { load, logAction, update } from './store.js';
@@ -806,6 +807,82 @@ route('POST', '/api/months/:id/day-pattern', (ctx) => {
     logAction(db, {
       userId: ctx.user.id, userName: ctx.user.name, action: 'gun-deseni',
       detail: `${dates.length} gün -> ${patternId || 'varsayılan'}`,
+    });
+    return monthWorkspace(db, month.id);
+  });
+});
+
+/**
+ * Gun deseni onerisi. Hicbir sey degistirmez — yalnizca mevcut yapilandirmayla
+ * aday yapilandirmalari karsilastirip dondurur. Uygulama karari yoneticinindir
+ * (bkz. /apply-patterns).
+ */
+route('POST', '/api/months/:id/propose-patterns', (ctx) => {
+  requireAdmin(ctx);
+  const { minDoctors, maxDoctors, keepManual } = ctx.body || {};
+  const db = load();
+  const { month, settings, ledger, carryOver, built } = buildMonthContext(db, ctx.params.id);
+  assertEditable(month);
+
+  const clampCount = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 1 && n <= 6 ? Math.round(n) : fallback;
+  };
+  const min = clampCount(minDoctors, 2);
+  const max = Math.max(min, clampCount(maxDoctors, 3));
+
+  const result = proposeDayPatterns(
+    { month, doctors: doctorsMap(db), settings, ledger, carryOver },
+    { built, minDoctors: min, maxDoctors: max, keepManual: keepManual !== false },
+  );
+  return { proposal: result, limits: { minDoctors: min, maxDoctors: max } };
+});
+
+/** Onerilen (ya da elle duzenlenmis) gun deseni haritasini toptan uygular. */
+route('POST', '/api/months/:id/apply-patterns', (ctx) => {
+  requireAdmin(ctx);
+  const { dayPatterns } = ctx.body || {};
+  if (!dayPatterns || typeof dayPatterns !== 'object') throw bad('Gün deseni haritası gerekli.');
+  return update((db) => {
+    const month = getMonth(db, ctx.params.id);
+    assertEditable(month);
+    const policy = resolveSettings(getSettings(db), month.settings || {}).shiftPolicy;
+    if (policy.mode !== 'flexible') throw bad('Gün deseni yalnızca esnek modda seçilebilir.');
+
+    const next = {};
+    let changed = 0;
+    for (const [date, patternId] of Object.entries(dayPatterns)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const pattern = policy.patternById.get(patternId);
+      if (!pattern) throw bad(`Bilinmeyen gün deseni: ${patternId}`);
+      if (!pattern.enabled) throw bad(`Bu gün deseni kapalı: ${pattern.name}`);
+      // Dondurulmus gunler hicbir kosulda degistirilmez. Bu gunlerde acik bir
+      // secim yoksa VARSAYILAN desen kullaniliyor demektir; haritaya yeni bir
+      // deger yazmak o gunun yapisini degistirir. Bu yuzden hicbir sey yazilmaz.
+      if (month.lockedThrough && date <= month.lockedThrough) continue;
+      next[date] = patternId;
+      if (month.dayPatterns?.[date] !== patternId) changed += 1;
+    }
+    // Dondurulmus gunlerin onceki secimleri, haritada yer almasalar da korunur.
+    for (const [date, patternId] of Object.entries(month.dayPatterns || {})) {
+      if (month.lockedThrough && date <= month.lockedThrough) next[date] = patternId;
+    }
+    month.dayPatterns = next;
+
+    // Desenler degisince slot yapisi degisir; gecersiz kalan atamalar dusulur.
+    const built = buildMonthContext(db, month.id).built;
+    const valid = new Set(built.slots.map((s) => s.id));
+    const kept = {};
+    for (const [slotId, doctorId] of Object.entries(month.assignments || {})) {
+      if (valid.has(slotId)) kept[slotId] = doctorId;
+    }
+    month.assignments = kept;
+    month.pinned = (month.pinned || []).filter((id) => valid.has(id));
+    month.plan = null;
+
+    logAction(db, {
+      userId: ctx.user.id, userName: ctx.user.name, action: 'desen-onerisi-uygulandi',
+      detail: `${month.id}: ${changed} gün değişti`,
     });
     return monthWorkspace(db, month.id);
   });

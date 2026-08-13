@@ -313,6 +313,11 @@ function toolbar() {
       title: 'İki nöbeti karşılıklı değiştir',
     }, icon('swap'), swapMode ? 'Takas: iptal' : 'Takas'),
     m.status !== 'final' && h('button', { class: 'btn', onClick: freezeDialog }, icon('lock'), 'Dondur'),
+    m.status !== 'final' && ws.config?.shiftPolicy?.mode === 'flexible' && h('button', {
+      class: 'btn',
+      onClick: proposeDialog,
+      title: 'Gün desenlerini araç denesin; sonucu görüp siz karar verin',
+    }, 'Desen öner'),
 
     h('div', { class: 'sep' }),
     m.status === 'draft' && hasSchedule && h('button', {
@@ -427,6 +432,168 @@ function openPatternPicker(day) {
           onClick: () => uygula(null, [day.iso]),
         }, 'Varsayılana dön'),
         h('button', { class: 'btn', onClick: close }, 'Kapat')));
+  }, { wide: true });
+}
+
+/* ------------------------ Desen onerisi --------------------------- */
+
+/**
+ * DESEN ONERISI — arac arar, yonetici karar verir.
+ *
+ * Neden otomatik uygulanmaz: bir gunde kac doktor bulunacagi adalet degil,
+ * bakim kalitesi ve guvenlik kararidir. Arac hasta yogunlugunu bilmez.
+ * Bu yuzden arama yoneticinin cizdigi sinirlar icinde yapilir ve sonuc
+ * yalnizca bir KARSILASTIRMA olarak sunulur.
+ */
+function karsilastirmaSatiri(baslik, ozet, { vurgu = false, taban = null } = {}) {
+  const fark = (deger, tabanDeger, tersYon = true) => {
+    if (taban === null || Math.abs(deger - tabanDeger) < 0.005) return null;
+    const iyi = tersYon ? deger < tabanDeger : deger > tabanDeger;
+    return h('span', {
+      class: iyi ? 'delta-good' : 'delta-bad',
+      style: { marginLeft: '4px', fontSize: '11px' },
+    }, `${deger > tabanDeger ? '+' : '−'}${fmtHours(Math.abs(deger - tabanDeger))}`);
+  };
+
+  return h('tr', { style: vurgu ? { fontWeight: 640 } : null },
+    h('td', null, baslik),
+    h('td', { class: 'num' }, String(ozet.slots)),
+    h('td', { class: 'num' },
+      ozet.countsEqual
+        ? h('span', { class: 'chip chip-ok' }, `herkes ${ozet.counts[0]}`)
+        : `${Math.min(...ozet.counts)}–${Math.max(...ozet.counts)}`),
+    h('td', { class: 'num' }, fmtHours(ozet.effSpread), taban && fark(ozet.effSpread, taban.effSpread)),
+    h('td', { class: 'num' }, fmtHours(ozet.presSpread), taban && fark(ozet.presSpread, taban.presSpread)),
+    h('td', { class: 'num' }, ozet.warnings ? h('span', { class: 'chip chip-warn' }, String(ozet.warnings)) : '—'),
+  );
+}
+
+function proposeDialog() {
+  const ws = state.ws;
+  const acikDesen = (ws.patterns || []).filter((p) => p.enabled !== false);
+  const kisiSecenekleri = [...new Set(acikDesen.map((p) => p.doctorsPerDay))].sort((a, b) => a - b);
+
+  openModal((close) => {
+    const minSel = h('select', null,
+      ...kisiSecenekleri.map((n) => h('option', { value: String(n), selected: n === 2 }, `${n} doktor`)));
+    const maxSel = h('select', null,
+      ...kisiSecenekleri.map((n) => h('option', { value: String(n), selected: n === Math.min(3, Math.max(...kisiSecenekleri)) }, `${n} doktor`)));
+    const manuelKoru = h('input', { type: 'checkbox', checked: true });
+
+    const sonuc = h('div');
+    const govde = h('div');
+
+    const ciz = () => {
+      govde.replaceChildren(
+        h('p', { class: 'modal-text' },
+          'Araç, açık gün desenlerinin kombinasyonlarını deneyip nöbet sayısı ve fiilî mesai ',
+          'dengesi en iyi çıkanı bulur. ',
+          h('strong', null, 'Hiçbir şey kendiliğinden değişmez'),
+          ' — sonucu görüp uygulayıp uygulamayacağınıza siz karar verirsiniz.'),
+
+        h('div', { class: 'banner banner-info mt-8' },
+          h('strong', null, 'Sınırları siz koyarsınız. '),
+          'Bir günde kaç doktor bulunacağı bir hasta güvenliği kararıdır; araç bunu bilemez. ',
+          'Aşağıdaki alt/üst sınırın dışına çıkan hiçbir öneri üretilmez.'),
+
+        h('div', { class: 'row mt-16' },
+          h('label', { class: 'field' }, 'Günde en az', minSel),
+          h('label', { class: 'field' }, 'Günde en çok', maxSel)),
+        h('label', { class: 'inline mt-8' }, manuelKoru,
+          'Elle desen seçtiğim günlere dokunma'),
+        ws.month.lockedThrough && h('div', { class: 'small muted mt-8' },
+          `${fmtDate(ws.month.lockedThrough)} tarihine kadar dondurulmuş günler her hâlükârda korunur.`),
+
+        h('div', { class: 'small muted mt-16' },
+          'Arama her adayı gerçek bir çizelge çözerek değerlendirir; birkaç saniye sürebilir.'),
+        sonuc,
+      );
+    };
+
+    const ara = async () => {
+      const out = await withBusy(
+        () => api.post(`/api/months/${ws.month.id}/propose-patterns`, {
+          minDoctors: Number(minSel.value),
+          maxDoctors: Number(maxSel.value),
+          keepManual: manuelKoru.checked,
+        }),
+      );
+      if (!out) return;
+      const p = out.proposal;
+
+      if (p.unavailable) {
+        sonuc.replaceChildren(h('div', { class: 'banner banner-warn mt-16' }, p.unavailable));
+        return;
+      }
+
+      const taban = p.current.summary;
+      sonuc.replaceChildren(
+        h('h4', { class: 'mt-16' }, `${p.searched} yapılandırma denendi`),
+        h('table', { class: 'mt-8' },
+          h('thead', null, h('tr', null,
+            h('th', null, 'Yapılandırma'),
+            h('th', { class: 'num' }, 'Nöbet'),
+            h('th', { class: 'num' }, 'Kişi başı'),
+            h('th', { class: 'num', title: 'En çok ve en az fiilî mesai arasındaki fark' }, 'Fiilî fark'),
+            h('th', { class: 'num', title: 'Hastanede bulunma saatleri arasındaki fark' }, 'Bulunma farkı'),
+            h('th', { class: 'num' }, 'Uyarı'))),
+          h('tbody', null,
+            karsilastirmaSatiri('Şu anki düzen', taban, { vurgu: true }),
+            ...p.candidates.map((c) => karsilastirmaSatiri(c.label, c.summary, { taban })))),
+
+        !p.best && h('div', { class: 'banner banner-ok mt-16' },
+          'Şu anki düzen, sınırlarınız içinde bulunabilen en iyi düzen. Değiştirmeye gerek yok.'),
+
+        p.best && h('div', { class: 'banner banner-info mt-16' },
+          h('div', null, h('strong', null, 'Öneri: '), p.best.label),
+          h('ul', { class: 'mt-8' },
+            p.best.summary.countsEqual && !taban.countsEqual
+              && h('li', null, `Nöbet sayısı herkeste eşitleniyor (${p.best.summary.counts[0]} nöbet).`),
+            p.best.summary.effSpread < taban.effSpread
+              && h('li', null, `Fiilî mesai farkı ${fmtHours(taban.effSpread)} sa → ${fmtHours(p.best.summary.effSpread)} sa.`),
+            p.best.staffingDelta
+              && h('li', null,
+                `Ay boyunca toplam nöbet sayısı ${p.best.staffingDelta > 0 ? 'artıyor' : 'azalıyor'}: `,
+                `${taban.slots} → ${p.best.summary.slots}. `,
+                h('strong', null, 'Bu bir kadro kararıdır'),
+                ' — günlük toplam iş yükü değişmez, aynı iş daha fazla/az nöbete bölünür.'),
+            p.best.exceptions
+              ? h('li', null, `${p.best.exceptions} gün varsayılan desenden farklı olacak.`)
+              : h('li', null, 'Ay boyunca tek bir düzen — istisna günü yok.'))),
+
+        p.best && h('div', { class: 'banner banner-warn mt-8' },
+          'Uygulanırsa bu ayın mevcut atamaları silinir ve çizelgeyi yeniden üretmeniz gerekir. ',
+          'Dondurulmuş günler korunur.'),
+
+        p.best && h('div', { class: 'modal-actions' },
+          h('button', {
+            class: 'btn btn-primary',
+            onClick: async () => {
+              const ok = await confirmDialog(
+                `"${p.best.label}" düzeni uygulanacak. Bu ayın mevcut atamaları silinecek ve çizelgeyi yeniden üretmeniz gerekecek.`,
+                { title: 'Öneriyi uygula', okLabel: 'Uygula' },
+              );
+              if (!ok) return;
+              const res = await withBusy(
+                () => api.post(`/api/months/${ws.month.id}/apply-patterns`, { dayPatterns: p.best.dayPatterns }),
+                { success: 'Gün desenleri uygulandı — çizelgeyi yeniden üretin' },
+              );
+              if (!res) return;
+              close();
+              applyWorkspace(res);
+            },
+          }, 'Öneriyi uygula')),
+      );
+    };
+
+    ciz();
+
+    return h('div', null,
+      h('h3', null, 'Gün deseni öner'),
+      govde,
+      h('div', { class: 'modal-actions' },
+        h('button', { class: 'btn', onClick: close }, 'Kapat'),
+        h('button', { class: 'btn btn-primary', onClick: ara }, 'Ara')));
   }, { wide: true });
 }
 
