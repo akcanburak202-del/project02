@@ -36,7 +36,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 42 test: motor, kurallar, adalet ve uçtan uca API
+npm test                      # 53 test: motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -114,6 +114,69 @@ sabitlenen nöbet yeniden üretimde yerinde kalır.
 
 ---
 
+## Giriş ve çıkış saatlerini araç belirler
+
+**Bu, aracın eşitliği sağlayabilmesinin anahtarıdır.**
+
+Saatler sabitlenirse (ör. her gün 09:00–24:00 ve 15:00–09:00) her nöbetin dört
+etikete katkısı da sabitlenir. O zaman bir doktorun "hafta içi paylaşımlı"
+toplamı ancak 9'un katları olabilir; hedef 47,3 saat ise **tutturulamaz**.
+Eşitlik algoritmanın değil, yapının sınırıdır.
+
+Bu yüzden devir ve geliş/çıkış saatleri birer **karar değişkenidir**. Yönetici
+makul aralıkları ve tercih edilen saati tanımlar; araç bu aralıklar içinde gün
+gün oynayarak dört etiketi eşitler.
+
+Varsayılan tercih değerleri tam olarak klasik düzeni verir — 09:00 devir,
+15:00 geliş, 24:00 çıkış — yani araç bu düzenden **yalnızca eşitlik için
+gerektiği kadar** sapar.
+
+### Ölçülen fark
+
+8 doktor, Ağustos 2026 (31 gün, 62 nöbet), aynı kurallar:
+
+| | Sabit saatler | Saatleri araç belirler |
+|---|---|---|
+| Ortalama mutlak sapma | 2,51 sa | **0,41 sa** |
+| Hafta içi paylaşımlı yayılım | 9,0 sa | **1,0 sa** |
+| Hafta sonu paylaşımlı yayılım | 9,0 sa | **2,5 sa** |
+| Üretim süresi | 0,1 sn | 1,6 sn |
+
+### Model
+
+Bir günde k doktor görev alır. Günün iskeleti şu değişkenlerle tanımlanır:
+
+- `h[d]` — sabah devri: gündüz ekibi gelir, gece ekibi çıkar
+- geliş saatleri — 2 … k'ncı vardiyaların hastaneye giriş saati
+- çıkış saatleri — 1 … (k−1)'inci vardiyaların çıkış saati
+
+Son vardiya, ertesi günün devir saatine kadar sürer. Böylece 24 saat
+kesintisiz kapanır ve ardışık vardiyaların kesişimi paylaşımlı mesaiyi
+oluşturur.
+
+*Ayarlar → Vardiya düzeni* ekranından her pencere için **en erken / tercih
+edilen / en geç** değerlerini girersiniz. Araç, girişleri asla bu aralıkların
+dışına taşımaz — gece 03:00 gibi saatler yapısal olarak imkânsızdır.
+
+**Saat esnekliği** ayarı ne kadar oynayacağını belirler:
+
+| Ayar | Davranış |
+|---|---|
+| Kapalı | Saatler hep tercih edilen değerde. En öngörülebilir, eşitlik en zayıf. |
+| Az | Nadiren ve az oynar. |
+| Ölçülü *(varsayılan)* | Eşitlik için gerektiği kadar oynar. |
+| Serbest | Eşitlik önce gelir; saatler gün gün daha çok değişir. |
+
+Mevzuat sabit saat gerektiriyorsa *Ayarlar → Vardiya düzeni → **Saatler
+sabit*** seçeneğiyle eski davranışa dönebilirsiniz; o zaman eşitsizlik devir
+defterine yazılıp sonraki aylarda kapatılır.
+
+Üretilen saatler çizelgeyle birlikte kaydedilir; ay yeniden açıldığında
+değişmez. Vardiya düzeni ayarları değiştirilirse kesinleşmemiş ayların saat
+planı sıfırlanır ve yeniden üretim beklenir.
+
+---
+
 ## Çizelge oluşturulurken uyulan kurallar
 
 ### Asla çiğnenmeyen (sert) kurallar
@@ -188,21 +251,10 @@ tarayıcıda durur ve CSV indirme kapalıdır. Gerçek kullanım için
 
 ## Ayarlar
 
-**Vardiya düzeni.** Varsayılan düzen kullanıcının tarif ettiği şekildedir:
-
-| Vardiya | Giriş | Çıkış | Süre |
-|---|---|---|---|
-| Gündüz | 09:00 | 24:00 | 15 sa |
-| Akşam/Gece | 15:00 | ertesi gün 09:00 | 18 sa |
-
-Kesişim 15:00–24:00 olduğundan gündüz doktoru 6 sa paylaşımsız + 9 sa
-paylaşımlı, gece doktoru 9 sa paylaşımlı + 9 sa paylaşımsız çalışır.
-
-Hafta içi ve hafta sonu için ayrı düzen tanımlanabilir; hazır şablonlar
-(2'li ve 3'lü düzenler) tek tıkla uygulanır. Ertesi güne taşan çıkış saati
-`09:00+1` biçiminde yazılır. Kaydetmeden önce sistem **24 saatin boşluksuz
-kapsandığını** denetler; kapsama boşluğu bırakan bir düzen kaydedilemez.
-Alışılmadık giriş saatleri (örneğin gece 03:00) uyarı üretir.
+**Vardiya düzeni.** Bkz. yukarıdaki *"Giriş ve çıkış saatlerini araç belirler"*
+bölümü. Hafta içi ve hafta sonu ayrı tanımlanır; günde kaç doktor görev alacağı
+(1–5) buradan seçilir. Sabit modda hazır şablonlar tek tıkla uygulanır ve
+kaydetmeden önce **24 saatin boşluksuz kapsandığı** denetlenir.
 
 **Çalışma kuralları.** İki nöbet arası en az dinlenme (varsayılan 12 saat),
 üst üste en fazla kaç gün nöbet tutulabileceği (varsayılan 1 — yani ardışık
@@ -300,6 +352,7 @@ engine/          Çizelge motoru (arayüzden ve sunucudan bağımsız, saf hesap
   time.js        Saat ayrıştırma; gece yarısını aşan vardiyalar
   calendar.js    Ay günleri, hafta sonu ve tatil tespiti
   slots.js       Nöbet üretimi + dört etiketli saat hesabı (sweep-line)
+  shiftplan.js   Giriş/çıkış saatlerinin karar modeli (esnek vardiya düzeni)
   fairness.js    Ağırlıklar, hedefler, devir defteri
   scheduler.js   Sert kurallar, maliyet fonksiyonu, çözücü
   policy.js      Tercih girişi yetki kuralları (izin yalnızca yöneticide)
@@ -309,5 +362,5 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            42 test — motor, kurallar, adalet hesabı ve uçtan uca API
+test/            53 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```

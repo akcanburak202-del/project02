@@ -169,12 +169,16 @@ test('ayin 19unda revizyon: onceki gunler aynen korunur', () => {
 test('sabitlenen (pinned) slot korunur', () => {
   const doctors = makeDoctors(8);
   const ids = Object.keys(doctors);
+  // Slot kimligi vardiya duzenine gore degistigi icin uretilen cizelgeden alinir.
+  const ilk = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+  const hedef = ilk.slots.find((s) => s.date === '2026-08-22' && s.isNight).id;
+
   const month = makeMonth('2026-08', ids, {
-    assignments: { '2026-08-22#gece': 'd07' },
-    pinned: ['2026-08-22#gece'],
+    assignments: { [hedef]: 'd07' },
+    pinned: [hedef],
   });
-  const out = generateSchedule({ month, doctors, settings });
-  assert.equal(out.assignments['2026-08-22#gece'], 'd07');
+  const out = generateSchedule({ month, doctors, settings, seed: 123 });
+  assert.equal(out.assignments[hedef], 'd07');
 });
 
 test('ayni tohum ayni cizelgeyi uretir, farkli tohum farkli sonuc verir', () => {

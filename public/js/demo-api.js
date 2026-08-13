@@ -13,9 +13,9 @@
  */
 
 import {
-  DEFAULT_OPTIMIZER, DEFAULT_RULES, DEFAULT_SHIFT_TEMPLATES, DEFAULT_WEIGHTS,
+  DEFAULT_OPTIMIZER, DEFAULT_RULES, DEFAULT_SHIFT_POLICY, DEFAULT_SHIFT_TEMPLATES, DEFAULT_WEIGHTS,
   analyzeAssignments, buildContext, extractCarryOver, generateSchedule,
-  monthLabel, parseMonthId, prevMonthId, resolveSettings, validateTemplates,
+  monthLabel, parseMonthId, prevMonthId, resolveSettings, validatePolicy, validateTemplates,
 } from '../../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../../engine/slots.js';
 import { candidatesForSlot, checkSwap } from '../../engine/scheduler.js';
@@ -52,6 +52,7 @@ function defaultSettings() {
     weekendDays: [0, 6],
     holidays: [],
     shiftTemplates: structuredClone(DEFAULT_SHIFT_TEMPLATES),
+    shiftPolicy: structuredClone(DEFAULT_SHIFT_POLICY),
     rules: { ...DEFAULT_RULES },
     weights: { ...DEFAULT_WEIGHTS, categoryWeights: { ...DEFAULT_WEIGHTS.categoryWeights } },
     optimizer: { ...DEFAULT_OPTIMIZER },
@@ -129,7 +130,7 @@ function createMonthRecord(d, id) {
     })),
     preferences: {}, assignments: {}, pinned: [], lockedThrough: null,
     prefWindowOpen: true, prefDeadline: null, settings: {}, seed: null,
-    generatedAt: null, warnings: [], notes: '', ledgerDelta: null,
+    generatedAt: null, warnings: [], notes: '', ledgerDelta: null, plan: null,
   };
 }
 
@@ -154,6 +155,7 @@ function getSettings(d) {
   const s = d.settings || {};
   return {
     ...base, ...s,
+    shiftPolicy: { ...base.shiftPolicy, ...(s.shiftPolicy || {}) },
     rules: { ...base.rules, ...(s.rules || {}) },
     weights: {
       ...base.weights, ...(s.weights || {}),
@@ -208,10 +210,12 @@ function buildMonthContext(d, id) {
 function monthWorkspace(d, id) {
   const { month, ledger, built } = buildMonthContext(d, id);
   const report = analyzeAssignments(built, month.assignments || {}, ledger);
-  const templateProblems = [
-    ...validateTemplates(built.config.shiftTemplates.weekday, 'Hafta içi', built.config.rules),
-    ...validateTemplates(built.config.shiftTemplates.weekend, 'Hafta sonu', built.config.rules),
-  ];
+  const templateProblems = built.config.shiftPolicy.mode === 'flexible'
+    ? validatePolicy(built.config.shiftPolicy)
+    : [
+      ...validateTemplates(built.config.shiftTemplates.weekday, 'Hafta içi', built.config.rules),
+      ...validateTemplates(built.config.shiftTemplates.weekend, 'Hafta sonu', built.config.rules),
+    ];
   return {
     month: {
       id: month.id, label: monthLabel(month.id), status: month.status,
@@ -380,6 +384,10 @@ route('GET', '/api/settings', () => {
 route('PUT', '/api/settings', ({ body }) => {
   requireAdmin();
   const d = load();
+  if (body.shiftPolicy) {
+    const errors = validatePolicy(body.shiftPolicy).filter((p) => p.level === 'error');
+    if (errors.length) throw bad(errors.map((e) => e.message).join(' '));
+  }
   if (body.shiftTemplates) {
     const rules = { ...DEFAULT_RULES, ...(body.rules || {}) };
     const errors = [
@@ -398,6 +406,10 @@ route('PUT', '/api/settings', ({ body }) => {
     },
     optimizer: { ...cur.optimizer, ...(body.optimizer || {}) },
   };
+  // Vardiya duzeni degistiyse kaydedilmis saat planlari gecersizlesir.
+  if (body.shiftPolicy || body.shiftTemplates) {
+    for (const m of Object.values(d.months)) if (m.status !== 'final') m.plan = null;
+  }
   save();
   return { settings: getSettings(d) };
 });
@@ -530,6 +542,7 @@ route('POST', '/api/months/:id/generate', ({ body, params }) => {
   month.assignments = out.assignments;
   month.warnings = out.warnings;
   month.seed = out.seed;
+  month.plan = out.plan;
   month.generatedAt = new Date().toISOString();
   save();
   return monthWorkspace(d, month.id);

@@ -3,7 +3,13 @@
  * degerlendirir.
  */
 
-import { buildSlots, validateTemplates, CATEGORIES, CATEGORY_KEYS, emptyCategoryVector, vectorTotal } from './slots.js';
+import {
+  buildSlots, buildSlotsFromPlan, validateTemplates,
+  CATEGORIES, CATEGORY_KEYS, emptyCategoryVector, vectorTotal,
+} from './slots.js';
+import {
+  DEFAULT_SHIFT_POLICY, createPlan, isDayValid, normalizePolicy, validatePolicy,
+} from './shiftplan.js';
 import { buildBalanceReport, computeActuals, computeTargets, computeWeights, updateLedger } from './fairness.js';
 import {
   DEFAULT_OPTIMIZER,
@@ -14,11 +20,14 @@ import {
   prepare,
   solve,
 } from './scheduler.js';
-import { parseMonthId, monthLabel, prevMonthId } from './calendar.js';
+import { parseMonthId, monthLabel, monthDays, prevMonthId } from './calendar.js';
 
 export {
   CATEGORIES,
   CATEGORY_KEYS,
+  DEFAULT_SHIFT_POLICY,
+  normalizePolicy,
+  validatePolicy,
   DEFAULT_OPTIMIZER,
   DEFAULT_RULES,
   DEFAULT_WEIGHTS,
@@ -48,6 +57,11 @@ export function resolveSettings(global = {}, override = {}) {
     weekendDays: override.weekendDays || global.weekendDays || [0, 6],
     holidays: [...new Set([...(global.holidays || []), ...(override.holidays || [])])].sort(),
     shiftTemplates: override.shiftTemplates || global.shiftTemplates || DEFAULT_SHIFT_TEMPLATES,
+    shiftPolicy: normalizePolicy({
+      ...DEFAULT_SHIFT_POLICY,
+      ...(global.shiftPolicy || {}),
+      ...(override.shiftPolicy || {}),
+    }),
     rules: { ...DEFAULT_RULES, ...(global.rules || {}), ...(override.rules || {}) },
     weights: {
       ...DEFAULT_WEIGHTS,
@@ -75,13 +89,27 @@ export function resolveSettings(global = {}, override = {}) {
 export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, carryOver = [] }) {
   const { year, month: mm } = parseMonthId(month.id);
   const cfg = resolveSettings(settings, month.settings || {});
-  const built = buildSlots({
-    year,
-    month: mm,
-    shiftTemplates: cfg.shiftTemplates,
-    weekendDays: cfg.weekendDays,
-    holidays: cfg.holidays,
-  });
+  const calendarOpts = { year, month: mm, weekendDays: cfg.weekendDays, holidays: cfg.holidays };
+
+  // Esnek modda giris/cikis saatleri karar degiskenidir; sabit modda
+  // yoneticinin tanimladigi vardiya sablonlari aynen kullanilir.
+  let built;
+  if (cfg.shiftPolicy.mode === 'flexible') {
+    const days = monthDays(year, mm, { weekendDays: cfg.weekendDays, holidays: cfg.holidays });
+    const plan = month.plan ? adoptPlan(month.plan, cfg.shiftPolicy, days) : createPlan(cfg.shiftPolicy, days);
+    built = buildSlotsFromPlan({
+      year, month: mm, days, plan,
+      weekendDays: cfg.weekendDays, holidays: cfg.holidays,
+    });
+  } else {
+    built = buildSlots({
+      year,
+      month: mm,
+      shiftTemplates: cfg.shiftTemplates,
+      weekendDays: cfg.weekendDays,
+      holidays: cfg.holidays,
+    });
+  }
 
   const ctx = prepare({
     slots: built.slots,
@@ -94,9 +122,43 @@ export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, 
     weights: cfg.weights,
     carryOver,
     doctorsById: doctors,
+    built,
+    calendarOpts,
   });
 
   return { ...built, ctx, config: cfg, year, month: mm };
+}
+
+/** Kaydedilmis saat planini mevcut ayarlarla birlestirir (sinirlara kirpar). */
+function adoptPlan(saved, policy, days) {
+  const plan = createPlan(policy, days);
+  try {
+    if (Array.isArray(saved.handover)) {
+      for (let d = 0; d < plan.handover.length && d < saved.handover.length; d += 1) {
+        plan.handover[d] = saved.handover[d];
+      }
+    }
+    (saved.days || []).forEach((dp, i) => {
+      if (!plan.days[i]) return;
+      (dp.arrivals || []).forEach((v, j) => { if (j < plan.days[i].arrivals.length) plan.days[i].arrivals[j] = v; });
+      (dp.exits || []).forEach((v, j) => { if (j < plan.days[i].exits.length) plan.days[i].exits[j] = v; });
+    });
+    for (let d = 0; d < days.length; d += 1) {
+      if (!isDayValid(plan, days, d)) return createPlan(policy, days);
+    }
+  } catch {
+    return createPlan(policy, days);
+  }
+  return plan;
+}
+
+/** Plani JSON'a yazilabilir hale getirir. */
+export function serializePlan(plan) {
+  if (!plan) return null;
+  return {
+    handover: Array.from(plan.handover),
+    days: plan.days.map((d) => ({ arrivals: Array.from(d.arrivals), exits: Array.from(d.exits) })),
+  };
 }
 
 /** Kilitli (donmus) ve sabitlenmis slotlarin atamalarini toplar. */
@@ -133,6 +195,9 @@ export function generateSchedule(input, options = {}) {
   const report = analyzeAssignments(built, result.assignments, input.ledger || {});
   return {
     assignments: result.assignments,
+    // Esnek modda uretilen giris/cikis saatleri de cizelgenin parcasidir;
+    // kaydedilmezse ay yeniden acildiginda saatler tercih degerine doner.
+    plan: serializePlan(built.ctx.plan),
     warnings: [...built.warnings, ...result.warnings],
     report,
     seed: result.seed,

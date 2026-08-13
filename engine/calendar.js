@@ -86,7 +86,13 @@ export function dayTypeOf(iso, { weekendDays = [0, 6], holidays = [] } = {}) {
   return weekendDays.includes(weekdayOf(iso)) ? 'weekend' : 'weekday';
 }
 
-/** Ay icindeki tum gunleri meta bilgisiyle dondurur. */
+/**
+ * Ay icindeki tum gunleri meta bilgisiyle dondurur.
+ *
+ * Ilk gune bir onceki ayin son gunu, son gune de bir sonraki ayin ilk gunu
+ * eklenir (prevIso / nextIso). Gece nobetleri ay sinirini astigi icin
+ * kesisim hesabinda bu komsu gunlere ihtiyac duyulur.
+ */
 export function monthDays(year, month, calendarOpts) {
   const total = daysInMonth(year, month);
   const out = [];
@@ -102,6 +108,14 @@ export function monthDays(year, month, calendarOpts) {
       type: dayTypeOf(iso, calendarOpts),
       isHoliday: (calendarOpts?.holidays || []).includes(iso),
     });
+  }
+  if (out.length) {
+    const prevIso = addDays(out[0].iso, -1);
+    const nextIso = addDays(out[out.length - 1].iso, 1);
+    out[0].prevIso = prevIso;
+    out[0].prevType = dayTypeOf(prevIso, calendarOpts);
+    out[out.length - 1].nextIso = nextIso;
+    out[out.length - 1].nextType = dayTypeOf(nextIso, calendarOpts);
   }
   return out;
 }

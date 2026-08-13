@@ -246,17 +246,22 @@ test('dondurulmus tarihe elle atama reddedilir', async () => {
   const ws = (await call('GET', '/api/months/2026-08')).data;
   const doctorId = Object.values(ws.doctors).find((d) => d.username === 'test1').id;
 
-  const blocked = await call('POST', '/api/months/2026-08/assign', { slotId: '2026-08-10#gunduz', doctorId });
+  const donmus = ws.slots.find((s) => s.date === '2026-08-10' && !s.isNight).id;
+  const serbest = ws.slots.find((s) => s.date === '2026-08-25' && !s.isNight).id;
+
+  const blocked = await call('POST', '/api/months/2026-08/assign', { slotId: donmus, doctorId });
   assert.equal(blocked.status, 400);
   assert.match(blocked.data.error, /dondurul/i);
 
-  const allowed = await call('POST', '/api/months/2026-08/assign', { slotId: '2026-08-25#gunduz', doctorId });
+  const allowed = await call('POST', '/api/months/2026-08/assign', { slotId: serbest, doctorId });
   assert.equal(allowed.status, 200);
-  assert.equal(allowed.data.assignments['2026-08-25#gunduz'], doctorId);
+  assert.equal(allowed.data.assignments[serbest], doctorId);
 });
 
 test('aday listesi uygunluk ve etki bilgisi dondurur', async () => {
-  const out = await call('GET', '/api/months/2026-08/candidates?slot=2026-08-25%23gece');
+  const ws = (await call('GET', '/api/months/2026-08')).data;
+  const slotId = ws.slots.find((s) => s.date === '2026-08-25' && s.isNight).id;
+  const out = await call('GET', `/api/months/2026-08/candidates?slot=${encodeURIComponent(slotId)}`);
   assert.equal(out.status, 200);
   assert.equal(out.data.candidates.length, 8);
   assert.ok(out.data.candidates.some((c) => c.feasible));

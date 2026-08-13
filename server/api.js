@@ -9,6 +9,7 @@
 import {
   DEFAULT_OPTIMIZER,
   DEFAULT_RULES,
+  DEFAULT_SHIFT_POLICY,
   DEFAULT_SHIFT_TEMPLATES,
   DEFAULT_WEIGHTS,
   analyzeAssignments,
@@ -21,6 +22,7 @@ import {
   prevMonthId,
   resolveSettings,
   updateLedger,
+  validatePolicy,
   validateTemplates,
 } from '../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../engine/slots.js';
@@ -60,6 +62,7 @@ export function defaultSettings() {
     weekendDays: [0, 6],
     holidays: [],
     shiftTemplates: structuredClone(DEFAULT_SHIFT_TEMPLATES),
+    shiftPolicy: structuredClone(DEFAULT_SHIFT_POLICY),
     rules: { ...DEFAULT_RULES },
     weights: { ...DEFAULT_WEIGHTS, categoryWeights: { ...DEFAULT_WEIGHTS.categoryWeights } },
     optimizer: { ...DEFAULT_OPTIMIZER },
@@ -72,6 +75,7 @@ export function getSettings(db) {
   return {
     ...base,
     ...db.settings,
+    shiftPolicy: { ...base.shiftPolicy, ...(db.settings.shiftPolicy || {}) },
     rules: { ...base.rules, ...(db.settings.rules || {}) },
     weights: {
       ...base.weights,
@@ -138,6 +142,7 @@ export function createMonthRecord(db, id) {
     warnings: [],
     notes: '',
     ledgerDelta: null,
+    plan: null,
   };
 }
 
@@ -213,10 +218,12 @@ export function buildMonthContext(db, id) {
 export function monthWorkspace(db, id) {
   const { month, settings, ledger, built } = buildMonthContext(db, id);
   const report = analyzeAssignments(built, month.assignments || {}, ledger);
-  const templateProblems = [
-    ...validateTemplates(built.config.shiftTemplates.weekday, 'Hafta içi', built.config.rules),
-    ...validateTemplates(built.config.shiftTemplates.weekend, 'Hafta sonu', built.config.rules),
-  ];
+  const templateProblems = built.config.shiftPolicy.mode === 'flexible'
+    ? validatePolicy(built.config.shiftPolicy)
+    : [
+      ...validateTemplates(built.config.shiftTemplates.weekday, 'Hafta içi', built.config.rules),
+      ...validateTemplates(built.config.shiftTemplates.weekend, 'Hafta sonu', built.config.rules),
+    ];
 
   return {
     month: {
@@ -504,6 +511,10 @@ route('PUT', '/api/settings', (ctx) => {
   const body = ctx.body || {};
   // Sablonlar kaydedilmeden once dogrulanir: kapsama boslugu olan bir sablon
   // ile ay uretilirse hastane bos kalir.
+  if (body.shiftPolicy) {
+    const errors = validatePolicy(body.shiftPolicy).filter((p) => p.level === 'error');
+    if (errors.length) throw bad(errors.map((e) => e.message).join(' '));
+  }
   if (body.shiftTemplates) {
     const rules = { ...DEFAULT_RULES, ...(body.rules || {}) };
     const problems = [
@@ -526,6 +537,13 @@ route('PUT', '/api/settings', (ctx) => {
       },
       optimizer: { ...current.optimizer, ...(body.optimizer || {}) },
     };
+    // Vardiya duzeni degistiyse kaydedilmis saat planlari gecersizlesir:
+    // yeniden uretilene kadar tercih edilen saatlere donulur.
+    if (body.shiftPolicy || body.shiftTemplates) {
+      for (const m of Object.values(db.months)) {
+        if (m.status !== 'final') m.plan = null;
+      }
+    }
     logAction(db, { userId: ctx.user.id, userName: ctx.user.name, action: 'ayarlar-guncellendi' });
     return { settings: getSettings(db) };
   });
@@ -680,6 +698,7 @@ route('POST', '/api/months/:id/generate', (ctx) => {
     month.assignments = out.assignments;
     month.warnings = out.warnings;
     month.seed = out.seed;
+    month.plan = out.plan;
     month.generatedAt = new Date().toISOString();
     logAction(db, {
       userId: ctx.user.id,

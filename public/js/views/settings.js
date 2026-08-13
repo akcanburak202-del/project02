@@ -2,7 +2,7 @@
  * Ayarlar: vardiya sablonlari, kurallar, oncelik agirliklari, tatiller.
  */
 
-import { api, confirmDialog, fmtDate, h, toast } from '../core.js';
+import { api, confirmDialog, fmtDate, h, segmented, toast } from '../core.js';
 import { render, state, withBusy } from '../state.js';
 
 const PRESETS = [
@@ -112,6 +112,118 @@ function rulesSummary(s) {
       h('ul', { class: 'small', style: { paddingLeft: '18px', margin: '6px 0 0' } }, yumusak.map(li))));
 }
 
+
+const FLEX_LABELS = [
+  { value: 'off', label: 'Kapalı', hint: 'Saatler hep tercih edilen değerde kalır. En öngörülebilir; eşitlik en zayıf.' },
+  { value: 'tight', label: 'Az', hint: 'Saatler nadiren ve az oynar.' },
+  { value: 'moderate', label: 'Ölçülü', hint: 'Önerilen. Eşitlik için gerektiği kadar oynar.' },
+  { value: 'free', label: 'Serbest', hint: 'Eşitlik önce gelir; saatler gün gün daha çok değişebilir.' },
+];
+
+/** Bir saat penceresi: en erken / tercih edilen / en geç. */
+function windowRow(label, w, onChange, hint) {
+  const field = (key, caption) => h('label', { class: 'field' }, caption,
+    h('input', {
+      type: 'time', step: '1800', value: w[key],
+      onChange: (e) => { w[key] = e.target.value || w[key]; onChange(); },
+    }));
+  return h('div', { style: { marginBottom: '10px' } },
+    h('div', { style: { fontWeight: 600, fontSize: '13px' } }, label),
+    hint && h('div', { class: 'small muted', style: { marginBottom: '4px' } }, hint),
+    h('div', { class: 'row' }, field('min', 'En erken'), field('preferred', 'Tercih edilen'), field('max', 'En geç')));
+}
+
+function sideEditor(side, onChange) {
+  const k = side.doctorsPerDay;
+  return h('div', null,
+    h('label', { class: 'field mb-8' }, 'Günde kaç doktor görev alır',
+      h('input', {
+        type: 'number', min: '1', max: '5', value: k,
+        onChange: (e) => {
+          const next = Math.max(1, Math.min(5, Number(e.target.value) || 1));
+          side.doctorsPerDay = next;
+          side.arrivals = Array.from({ length: next - 1 }, (_, i) =>
+            side.arrivals?.[i] || { min: '14:00', preferred: '15:00', max: '17:00' });
+          side.exits = Array.from({ length: next - 1 }, (_, i) =>
+            side.exits?.[i] || { min: '22:00', preferred: '24:00', max: '24:00' });
+          side.labels = Array.from({ length: next }, (_, i) =>
+            side.labels?.[i] || (i === 0 ? 'Gündüz' : i === next - 1 ? 'Akşam/Gece' : `Vardiya ${i + 1}`));
+          onChange();
+        },
+      })),
+    windowRow('Sabah devri', side.handover, onChange,
+      'Gündüz ekibi gelir, gece ekibi çıkar.'),
+    (side.arrivals || []).map((a, i) => h('div', null,
+      windowRow(`${i + 2}. vardiyanın gelişi`, a, onChange),
+      windowRow(`${i + 1}. vardiyanın çıkışı`, side.exits[i], onChange,
+        'Bu iki saatin arası paylaşımlı mesai olur.'))));
+}
+
+/** Vardiya düzeni kartı: saatleri araç mı seçsin, yönetici mi sabitlesin. */
+function shiftCard(s, touch, applyPreset) {
+  const policy = s.shiftPolicy;
+  const esnek = policy.mode !== 'fixed';
+
+  return h('div', { class: 'card mb-8' },
+    h('div', { class: 'card-head' },
+      h('h3', { class: 'grow' }, 'Vardiya düzeni'),
+      segmented([
+        { value: 'flexible', label: 'Saatleri araç belirlesin' },
+        { value: 'fixed', label: 'Saatler sabit' },
+      ], esnek ? 'flexible' : 'fixed', (v) => { policy.mode = v; render(); })),
+
+    h('div', { class: 'card-body' },
+      esnek
+        ? h('div', null,
+          h('div', { class: 'banner banner-info' },
+            h('div', null,
+              'Araç, aşağıdaki aralıklar içinde her gün için giriş/çıkış saatlerini kendisi seçer. ',
+              'Saatler sabitlenirse her nöbetin dört etikete katkısı da sabitlenir ve eşit dağıtım ',
+              h('b', null, 'matematiksel olarak imkânsız'), ' hale gelir — bir doktorun payı hep aynı ',
+              'büyüklüğün katları olabilir. Esneklik bu kilidi açar.')),
+          h('div', { class: 'row-wrap gap-16 mb-8' },
+            h('label', { class: 'field' }, 'Saat esnekliği',
+              h('select', {
+                onChange: (e) => { policy.flexibility = e.target.value; render(); },
+              }, FLEX_LABELS.map((f) =>
+                h('option', { value: f.value, selected: policy.flexibility === f.value }, f.label))),
+              h('span', { class: 'small muted', style: { fontWeight: 400 } },
+                FLEX_LABELS.find((f) => f.value === policy.flexibility)?.hint || '')),
+            h('label', { class: 'field' }, 'Saat adımı (dakika)',
+              h('select', {
+                onChange: (e) => { policy.stepMinutes = Number(e.target.value); },
+              }, [15, 30, 60].map((v) =>
+                h('option', { value: v, selected: Number(policy.stepMinutes) === v }, `${v} dk`)))),
+            h('label', { class: 'field' }, 'En kısa vardiya (saat)',
+              h('input', {
+                type: 'number', min: '4', max: '24', value: policy.minShiftHours,
+                onChange: (e) => { policy.minShiftHours = Number(e.target.value); },
+              })),
+            h('label', { class: 'field' }, 'En uzun vardiya (saat)',
+              h('input', {
+                type: 'number', min: '8', max: '24', value: policy.maxShiftHours,
+                onChange: (e) => { policy.maxShiftHours = Number(e.target.value); },
+              }))),
+          h('div', { class: 'row-wrap gap-16', style: { alignItems: 'flex-start' } },
+            h('div', { style: { flex: '1 1 380px' } },
+              h('h4', { class: 'mb-8' }, 'Hafta içi'), sideEditor(policy.weekday, touch)),
+            h('div', { style: { flex: '1 1 380px' } },
+              h('h4', { class: 'mb-8' }, 'Hafta sonu ve resmî tatil'), sideEditor(policy.weekend, touch))))
+        : h('div', null,
+          h('div', { class: 'banner banner-warn' },
+            'Sabit saatlerde her nöbetin katkısı değişmez; dört etiketin tam eşit dağıtılması ',
+            'genellikle mümkün olmaz ve fark devir defterine yazılır. Mevzuat gerektirmiyorsa ',
+            '"Saatleri araç belirlesin" seçeneğini kullanın.'),
+          h('div', { class: 'row-wrap mb-8' },
+            PRESETS.map((p) => h('button', { class: 'btn btn-sm', title: p.detail, onClick: () => applyPreset(p) }, p.name))),
+          h('div', { class: 'row-wrap gap-16', style: { alignItems: 'flex-start' } },
+            h('div', { style: { flex: '1 1 340px' } },
+              h('h4', { class: 'mb-8' }, 'Hafta içi'), templateEditor(s.shiftTemplates.weekday, touch)),
+            h('div', { style: { flex: '1 1 340px' } },
+              h('h4', { class: 'mb-8' }, 'Hafta sonu ve resmî tatil'), templateEditor(s.shiftTemplates.weekend, touch))))),
+  );
+}
+
 export function renderSettings() {
   if (!state.settingsDraft) {
     api.get('/api/settings').then((out) => {
@@ -180,19 +292,7 @@ export function renderSettings() {
                     },
                   }), d))))))),
 
-    h('div', { class: 'card mb-8' },
-      h('div', { class: 'card-head' },
-        h('h3', { class: 'grow' }, 'Vardiya düzeni'),
-        h('div', { class: 'row-wrap' },
-          PRESETS.map((p) => h('button', { class: 'btn btn-sm', title: p.detail, onClick: () => applyPreset(p) }, p.name)))),
-      h('div', { class: 'card-body' },
-        h('div', { class: 'row-wrap gap-16', style: { alignItems: 'flex-start' } },
-          h('div', { style: { flex: '1 1 340px' } },
-            h('h4', { class: 'mb-8' }, 'Hafta içi'),
-            templateEditor(s.shiftTemplates.weekday, touch)),
-          h('div', { style: { flex: '1 1 340px' } },
-            h('h4', { class: 'mb-8' }, 'Hafta sonu ve resmî tatil'),
-            templateEditor(s.shiftTemplates.weekend, touch))))),
+    shiftCard(s, touch, applyPreset),
 
     h('div', { class: 'card mb-8' },
       h('div', { class: 'card-head' }, h('h3', null, 'Çalışma kuralları')),

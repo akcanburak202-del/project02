@@ -18,10 +18,15 @@
  * denetlenebilir ve tekrar uretilebilir olmasi icin bilincli bir tercihtir.
  */
 
-import { CATEGORY_KEYS } from './slots.js';
+import { CATEGORY_KEYS, refreshPlanSlots, refreshPlanWindow } from './slots.js';
+import {
+  FLEXIBILITY_WEIGHTS, affectedDays, isDayValid, planDeviationHours,
+  readVariable, timeVariables, writeVariable,
+} from './shiftplan.js';
 import { availableDates, computeActuals, computeTargets, computeWeights } from './fairness.js';
 import { MIN_PER_DAY } from './time.js';
 import { addDays, diffDays } from './calendar.js';
+import { clonePlan, createPlan } from './shiftplan.js';
 
 export const DEFAULT_WEIGHTS = {
   fairness: 1,
@@ -95,6 +100,8 @@ export function prepare({
   weights = {},
   carryOver = [],
   doctorsById = {},
+  built = null,
+  calendarOpts = {},
 }) {
   const R = { ...DEFAULT_RULES, ...rules };
   const W = {
@@ -237,7 +244,7 @@ export function prepare({
     eligibility.push(list);
   }
 
-  return {
+  const ctx = {
     slots, days, totals, participants: active, doctorIds, doctorsById, indexById,
     nDoctors, nSlots, totalDays,
     slotStart, slotEnd, slotDay, slotIsNight, slotIsWeekend, slotCat, slotIndexById, dayIndexByIso,
@@ -246,7 +253,73 @@ export function prepare({
     carryByDoctor, minRestMin, maxConsecutive, catW,
     eligibility, availSets,
     rules: R, weights: W, weightMap, targetMap,
+    ledger, weightSum: sumWeight,
+    plan: null, timeVars: null,
+    planCost: (state) => totalCost(ctx, state),
+    syncPlan: () => {},
   };
+
+  // --- Esnek saat modu ---
+  // Giris/cikis saatleri karar degiskeniyse, saatler degistikce slotlarin
+  // kategori dagilimi ve ayin toplamlari da degisir. Asagidaki syncPlan bu
+  // turevleri (slot dizileri + hedefler) yeniden hesaplar.
+  if (built && built.plan) {
+    ctx.plan = built.plan;
+    ctx.timeVars = timeVariables(built.plan, days);
+    ctx.flexWeight = FLEXIBILITY_WEIGHTS[built.plan.policy.flexibility] ?? FLEXIBILITY_WEIGHTS.moderate;
+    if (!Number.isFinite(ctx.flexWeight)) {
+      ctx.timeVars = []; // 'off' — saatler tercih edilen degerde sabit
+      ctx.flexWeight = 0;
+    }
+
+    // Yalnizca etkilenen gunler yeniden hesaplanir (fromDay..toDay verilirse).
+    ctx.syncPlan = (fromDay, toDay) => {
+      if (fromDay === undefined) refreshPlanSlots(built, calendarOpts);
+      else refreshPlanWindow(built, calendarOpts, fromDay, toDay);
+
+      const first = fromDay === undefined ? 0 : ctx.firstSlotOfDay[Math.max(0, fromDay - 1)] ?? 0;
+      const last = fromDay === undefined ? nSlots : ctx.lastSlotOfDay[Math.min(totalDays - 1, toDay + 1)] ?? nSlots;
+      for (let i = first; i < last; i += 1) {
+        const slot = slots[i];
+        ctx.slotStart[i] = slot.startMin;
+        ctx.slotEnd[i] = slot.endMin;
+        for (let c = 0; c < 4; c += 1) ctx.slotCat[i * 4 + c] = slot.cat[CATEGORY_KEYS[c]] || 0;
+      }
+      // Toplamlar degisti -> herkesin hedefi yeniden hesaplanir
+      const nextTargets = computeTargets(built.totals, weightMap, ledger, { maxCarryRatio: R.maxCarryRatio });
+      ctx.targetMap = nextTargets;
+      doctorIds.forEach((id, d) => {
+        const entry = nextTargets.get(id);
+        for (let c = 0; c < 4; c += 1) ctx.targets[d * 4 + c] = entry.target[CATEGORY_KEYS[c]];
+      });
+      ctx.totals = built.totals;
+    };
+
+    // Tercih edilen saatlerden sapmanin bedeli maliyete eklenir; boylece
+    // saatler yalnizca esitlik icin gerektigi kadar oynar.
+    // Gun -> slot indeksi araliklari (yerel guncelleme icin)
+    ctx.firstSlotOfDay = new Int32Array(totalDays).fill(nSlots);
+    ctx.lastSlotOfDay = new Int32Array(totalDays);
+    for (let i = 0; i < nSlots; i += 1) {
+      const d = slotDay[i];
+      if (i < ctx.firstSlotOfDay[d]) ctx.firstSlotOfDay[d] = i;
+      if (i + 1 > ctx.lastSlotOfDay[d]) ctx.lastSlotOfDay[d] = i + 1;
+    }
+
+    ctx.planCost = (state) => totalCost(ctx, state) + ctx.flexWeight * planDeviationHours(ctx.plan, ctx.timeVars);
+  }
+
+  return ctx;
+}
+
+/** Plani tercih edilen saatlere dondurur (yeniden baslatmalar icin). */
+function resetPlan(ctx) {
+  const fresh = createPlan(ctx.plan.policy, ctx.days);
+  ctx.plan.handover.set(fresh.handover);
+  fresh.days.forEach((dp, i) => {
+    ctx.plan.days[i].arrivals.set(dp.arrivals);
+    ctx.plan.days[i].exits.set(dp.exits);
+  });
 }
 
 /** Bos bir cozum durumu olusturur. */
@@ -518,6 +591,89 @@ function greedyFill(ctx, state, rng, unassigned) {
   return warnings;
 }
 
+/**
+ * Saat degiskeni hamlesi: bir gunun devir/gelis/cikis saatini oynatir.
+ *
+ * Saatler degisince slotlarin kategori dagilimi ve ayin toplamlari — dolayisiyla
+ * herkesin hedefi — degisir. Bu yuzden hamle sonrasi tam maliyet yeniden
+ * hesaplanir. Atamalarin sert kurallara uygunlugu da yeniden denetlenir:
+ * saat oynatmak dinlenme suresini kisaltmis olabilir.
+ */
+function timeMove(ctx, state, rng, temp) {
+  const vars = ctx.timeVars;
+  if (!vars || !vars.length) return;
+
+  const v = vars[(rng() * vars.length) | 0];
+  const step = ctx.plan.policy.stepMinutes;
+  const current = readVariable(ctx.plan, v);
+
+  // Kucuk bir adim ya da alan icinde rastgele bir deger
+  let next;
+  if (rng() < 0.7) {
+    next = current + (rng() < 0.5 ? -step : step);
+  } else {
+    const slots = Math.floor((v.max - v.min) / step);
+    next = v.min + ((rng() * (slots + 1)) | 0) * step;
+  }
+  if (next < v.min || next > v.max || next === current) return;
+
+  const before = ctx.planCost(state);
+  writeVariable(ctx.plan, v, next);
+
+  const touched = affectedDays(v.kind, v.day, ctx.totalDays);
+  let ok = true;
+  for (const d of touched) if (!isDayValid(ctx.plan, ctx.days, d)) { ok = false; break; }
+  if (v.kind === 'handover' && v.day === ctx.totalDays) ok = ok && isDayValid(ctx.plan, ctx.days, ctx.totalDays - 1);
+  if (!ok) {
+    writeVariable(ctx.plan, v, current);
+    return;
+  }
+
+  const lo = Math.max(0, Math.min(...touched, v.day) - 1);
+  const hi = Math.min(ctx.totalDays - 1, Math.max(...touched, v.day));
+  ctx.syncPlan(lo, hi);
+
+  if (!allAssignmentsFeasible(ctx, state)) {
+    writeVariable(ctx.plan, v, current);
+    ctx.syncPlan(lo, hi);
+    return;
+  }
+
+  const after = ctx.planCost(state);
+  if (after <= before || rng() < Math.exp(-(after - before) / temp)) return;
+
+  writeVariable(ctx.plan, v, current);
+  ctx.syncPlan(lo, hi);
+}
+
+/** Mevcut atamalarin tamami sert kurallara uyuyor mu. */
+function allAssignmentsFeasible(ctx, state) {
+  for (let d = 0; d < ctx.nDoctors; d += 1) {
+    const mine = state.byDoctor[d];
+    for (let i = 0; i < mine.length; i += 1) {
+      const si = mine[i];
+      const start = ctx.slotStart[si];
+      const end = ctx.slotEnd[si];
+      for (let j = i + 1; j < mine.length; j += 1) {
+        const o = mine[j];
+        const os = ctx.slotStart[o];
+        const oe = ctx.slotEnd[o];
+        if (start < oe && os < end) return false;
+        const gap = start >= oe ? start - oe : os - end;
+        if (gap < ctx.minRestMin) return false;
+      }
+      const carry = ctx.carryByDoctor[d];
+      for (let k = 0; k < carry.length; k += 1) {
+        const c = carry[k];
+        if (start < c.end && c.start < end) return false;
+        const gap = start >= c.end ? start - c.end : c.start - end;
+        if (gap < ctx.minRestMin) return false;
+      }
+    }
+  }
+  return true;
+}
+
 /** Tavlama benzetimi ile yerel arama. */
 function anneal(ctx, state, rng, movable, opts) {
   if (movable.length < 2) return;
@@ -526,9 +682,16 @@ function anneal(ctx, state, rng, movable, opts) {
   const t1 = Math.max(1e-6, opts.endTemp);
   const decay = iterations > 0 ? (t1 / t0) ** (1 / iterations) : 1;
   let temp = t0;
+  const timeShare = ctx.timeVars?.length ? (opts.timeMoveShare ?? 0.25) : 0;
 
   for (let it = 0; it < iterations; it += 1) {
     temp *= decay;
+
+    if (timeShare > 0 && rng() < timeShare) {
+      timeMove(ctx, state, rng, temp);
+      continue;
+    }
+
     const si = movable[(rng() * movable.length) | 0];
     const a = state.assign[si];
 
@@ -609,20 +772,37 @@ export function solve(ctx, options = {}) {
   let best = null;
   let bestCost = Infinity;
   let bestWarnings = [];
+  let bestPlan = null;
 
   const restarts = Math.max(1, opt.restarts | 0);
   for (let r = 0; r < restarts; r += 1) {
     const rng = makeRng(seed + r * 7919);
+    // Her yeniden baslatma tercih edilen saatlerden baslar.
+    if (ctx.plan) {
+      resetPlan(ctx);
+      ctx.syncPlan();
+    }
     const state = createState(ctx);
     for (const [si, d] of fixedPairs) place(ctx, state, si, d);
     const warnings = greedyFill(ctx, state, rng, movable);
     anneal(ctx, state, rng, movable, opt);
-    const cost = totalCost(ctx, state);
+    const cost = ctx.planCost(state);
     if (cost < bestCost) {
       bestCost = cost;
       best = state;
       bestWarnings = warnings;
+      bestPlan = ctx.plan ? clonePlan(ctx.plan) : null;
     }
+  }
+
+  // En iyi plani geri yukle ki cikti ile maliyet tutarli olsun.
+  if (bestPlan) {
+    ctx.plan.handover.set(bestPlan.handover);
+    bestPlan.days.forEach((dp, i) => {
+      ctx.plan.days[i].arrivals.set(dp.arrivals);
+      ctx.plan.days[i].exits.set(dp.exits);
+    });
+    ctx.syncPlan();
   }
 
   const assignments = {};
