@@ -3,7 +3,7 @@
  */
 
 import { api, confirmDialog, fmtDate, h, toast } from '../core.js';
-import { render, state, withBusy } from '../app.js';
+import { render, state, withBusy } from '../state.js';
 
 const PRESETS = [
   {
@@ -71,6 +71,45 @@ function templateEditor(list, onChange) {
       'Ertesi güne taşan çıkış saatini "+1" ile yazın: ', h('code', null, '09:00+1'), '. ',
       'Gün sonunda biten vardiya için ', h('code', null, '24:00'), ' kullanın. ',
       'Vardiyalar birlikte günün 24 saatini boşluksuz kapsamalıdır.'));
+}
+
+/**
+ * Cizelge uretilirken uyulan kurallarin ozeti. Mevcut ayarlara gore
+ * metinler guncellenir; boylece "hangi kurallara uyuluyor" sorusunun
+ * cevabi her zaman ekranda ve dogru olur.
+ */
+function rulesSummary(s) {
+  const sert = [
+    'İzinli/raporlu işaretlenen günlere kesinlikle nöbet yazılmaz.',
+    'Görev başlangıç/bitiş tarihi dışına nöbet yazılmaz; gece nöbeti ertesi sabaha taştığı için görev bitiş gününde gece nöbeti verilmez.',
+    'Bir doktora aynı gün iki vardiya verilmez.',
+    Number(s.rules.maxConsecutiveDays) <= 1
+      ? 'Üst üste iki gün nöbet verilmez — iki nöbet arasında en az bir tam gün boş kalır.'
+      : `Üst üste en fazla ${s.rules.maxConsecutiveDays} gün nöbet verilir.`,
+    `İki nöbet arasında en az ${s.rules.minRestHours} saat dinlenme bırakılır (önceki aydan devreden gece nöbeti de hesaba katılır).`,
+    s.rules.maxShiftsPerMonth
+      ? `Bir doktor ayda en fazla ${s.rules.maxShiftsPerMonth} nöbet tutar.`
+      : 'Aylık nöbet üst sınırı tanımlı değil (kişi bazında Katılım ekranından verilebilir).',
+    'Günün 24 saati boşluksuz kapsanır; hiçbir slot boş bırakılmaz.',
+  ];
+  const yumusak = [
+    'Dört etiketin (hafta içi/hafta sonu × paylaşımlı/paylaşımsız) hedeften sapması en aza indirilir.',
+    'Nöbet, gece ve hafta sonu sayıları dengelenir.',
+    '"İstemiyorum" günlerinden kaçınılır, "istiyorum" günleri tercih edilir.',
+    'Nöbetler aya dengeli yayılır; birbirine çok yakın nöbetler cezalandırılır.',
+    'Gündüz/gece ağırlıklı çalışma tercihi gözetilir.',
+  ];
+  const li = (t) => h('li', { style: { marginBottom: '3px' } }, t);
+  return h('div', { class: 'row-wrap gap-16 mt-16', style: { alignItems: 'flex-start' } },
+    h('div', { style: { flex: '1 1 340px' } },
+      h('h4', null, 'Asla çiğnenmeyen kurallar'),
+      h('ul', { class: 'small', style: { paddingLeft: '18px', margin: '6px 0 0' } }, sert.map(li)),
+      h('div', { class: 'small muted mt-8' },
+        'Kadro bu kurallar için fazla darsa çizelge yine üretilir ama dinlenme / üst üste gün kuralı gevşetilen her nöbet ',
+        h('b', null, 'uyarı olarak bildirilir'), ' — sessizce çiğnenmez.')),
+    h('div', { style: { flex: '1 1 340px' } },
+      h('h4', null, 'Elden geldiğince gözetilenler'),
+      h('ul', { class: 'small', style: { paddingLeft: '18px', margin: '6px 0 0' } }, yumusak.map(li))));
 }
 
 export function renderSettings() {
@@ -164,11 +203,15 @@ export function renderSettings() {
               type: 'number', min: '0', max: '72', value: s.rules.minRestHours,
               onChange: (e) => { s.rules.minRestHours = Number(e.target.value); },
             })),
-          h('label', { class: 'field' }, 'En fazla üst üste nöbet günü',
+          h('label', { class: 'field' }, 'Üst üste en fazla kaç gün nöbet',
             h('input', {
               type: 'number', min: '1', max: '7', value: s.rules.maxConsecutiveDays,
-              onChange: (e) => { s.rules.maxConsecutiveDays = Number(e.target.value); },
-            })),
+              onChange: (e) => { s.rules.maxConsecutiveDays = Number(e.target.value); render(); },
+            }),
+            h('span', { class: 'small muted', style: { fontWeight: 400 } },
+              Number(s.rules.maxConsecutiveDays) <= 1
+                ? 'İki nöbet arasında en az bir tam gün boş kalır.'
+                : `${s.rules.maxConsecutiveDays} güne kadar ardışık nöbet verilebilir.`)),
           h('label', { class: 'field' }, 'Aylık nöbet üst sınırı (boş = sınırsız)',
             h('input', {
               type: 'number', min: '1', max: '31', value: s.rules.maxShiftsPerMonth ?? '',
@@ -180,7 +223,8 @@ export function renderSettings() {
               onChange: (e) => { s.rules.maxCarryRatio = Number(e.target.value); },
             }))),
         h('div', { class: 'small muted mt-8' },
-          'Devir telafi oranı, bir ayda kapatılabilecek devir miktarını sınırlar. 0,4 = adil payın en fazla %40\'ı kadar kaydırma.'))),
+          'Devir telafi oranı, bir ayda kapatılabilecek devir miktarını sınırlar. 0,4 = adil payın en fazla %40\'ı kadar kaydırma.'),
+        rulesSummary(s))),
 
     h('div', { class: 'card mb-8' },
       h('div', { class: 'card-head' }, h('h3', null, 'Öncelikler')),

@@ -3,6 +3,10 @@
  */
 
 import { api, clear, currentMonthId, h, mount, openModal, toast, trMonthLabel } from './core.js';
+import {
+  applyWorkspace, isAdmin, refreshMonths, reloadWorkspace, render,
+  setLoading, setRenderer, state, withBusy,
+} from './state.js';
 import { renderSchedule } from './views/schedule.js';
 import { renderRoster } from './views/roster.js';
 import { renderPreferencesAdmin } from './views/preferences.js';
@@ -10,17 +14,6 @@ import { renderBalance } from './views/balance.js';
 import { renderDoctors } from './views/doctors.js';
 import { renderSettings } from './views/settings.js';
 import { renderDoctorHome } from './views/doctor-home.js';
-
-export const state = {
-  me: null,
-  hospitalName: 'Acil Servis',
-  months: [],
-  monthId: null,
-  ws: null,
-  tab: 'schedule',
-  loading: false,
-  selection: null, // takas modu icin secili slot
-};
 
 const ADMIN_TABS = [
   { id: 'schedule', label: 'Çizelge' },
@@ -35,41 +28,7 @@ const DOCTOR_TABS = [{ id: 'mine', label: 'Nöbetlerim ve Tercihlerim' }];
 
 const root = document.getElementById('app');
 
-export function isAdmin() {
-  return state.me?.role === 'admin';
-}
-
-/* ------------------------------ Veri ------------------------------ */
-
-export async function reloadWorkspace() {
-  if (!state.monthId) {
-    state.ws = null;
-    return;
-  }
-  try {
-    state.ws = await api.get(`/api/months/${state.monthId}`);
-  } catch (err) {
-    state.ws = null;
-    toast(err.message, 'error');
-  }
-}
-
-/** Sunucudan donen ay verisini dogrudan uygular (ekstra istek olmadan). */
-export function applyWorkspace(ws) {
-  if (ws && ws.month) {
-    state.ws = { ...state.ws, ...ws };
-    const entry = state.months.find((m) => m.id === ws.month.id);
-    if (entry) entry.status = ws.month.status;
-  }
-  render();
-}
-
-export async function refreshMonths() {
-  const data = await api.get('/api/months');
-  state.months = data.months;
-}
-
-export async function selectMonth(id) {
+async function selectMonth(id) {
   state.monthId = id;
   state.selection = null;
   location.hash = `#/${state.tab}/${id}`;
@@ -79,31 +38,10 @@ export async function selectMonth(id) {
   render();
 }
 
-export function setTab(tab) {
+function setTab(tab) {
   state.tab = tab;
   location.hash = `#/${tab}/${state.monthId || ''}`;
   render();
-}
-
-export function setLoading(value) {
-  state.loading = value;
-  const el = document.getElementById('busy');
-  if (el) el.classList.toggle('hidden', !value);
-}
-
-/** Uzun surebilecek islemler icin: butonlari kilitle, hatayi bildir. */
-export async function withBusy(fn, { success } = {}) {
-  setLoading(true);
-  try {
-    const out = await fn();
-    if (success) toast(success, 'ok');
-    return out;
-  } catch (err) {
-    toast(err.message, 'error', 6000);
-    return null;
-  } finally {
-    setLoading(false);
-  }
 }
 
 /* ---------------------------- Gorunum ----------------------------- */
@@ -256,7 +194,7 @@ function currentView() {
   }
 }
 
-export function render() {
+function renderShell() {
   if (!state.me) return;
   const needsMonth = ['schedule', 'roster', 'prefs', 'balance'].includes(state.tab);
   const view = state.loading && needsMonth && !state.ws
@@ -344,5 +282,6 @@ window.addEventListener('hashchange', () => {
   }
 });
 
+setRenderer(renderShell);
 clear(root);
 start();

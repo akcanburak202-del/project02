@@ -40,7 +40,8 @@ export const DEFAULT_WEIGHTS = {
 
 export const DEFAULT_RULES = {
   minRestHours: 12,
-  maxConsecutiveDays: 2,
+  // 1 = ust uste gun yok; iki nobet arasinda en az bir tam bos gun kalir.
+  maxConsecutiveDays: 1,
   maxShiftsPerMonth: null,
   earliestStart: '06:00',
   latestStart: '22:00',

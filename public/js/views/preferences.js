@@ -4,7 +4,7 @@
  */
 
 import { api, h, toast } from '../core.js';
-import { applyWorkspace, render, state, withBusy } from '../app.js';
+import { applyWorkspace, render, state, withBusy } from '../state.js';
 
 const CYCLE = { undefined: 'want', want: 'avoid', avoid: 'off', off: null };
 const LABEL = { want: 'istiyor', avoid: 'istemiyor', off: 'izinli' };

@@ -3,7 +3,7 @@
  */
 
 import { api, confirmDialog, fmtSigned, h, openModal, toast } from '../core.js';
-import { render, state, withBusy } from '../app.js';
+import { render, state, withBusy } from '../state.js';
 
 async function loadDoctors() {
   const out = await api.get('/api/doctors');

@@ -36,7 +36,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 38 test: motor, adalet hesabı ve uçtan uca API
+npm test                      # 42 test: motor, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -65,10 +65,12 @@ Doktorlar kendi hesaplarıyla girip takvimde gün işaretler:
 
 - **İstiyorum** — mümkünse bu güne yaz
 - **İstemiyorum** — mümkünse yazma *(eşit dağılımı bozmadığı sürece karşılanır)*
-- **İzinliyim** — kesin kural, o güne asla nöbet yazılmaz ve aylık hedefi düşer
 
-Telefonla gelen istekleri *Tercihler* sekmesinden doktor adına siz de
-işaretleyebilirsiniz. Tercih girişini aynı ekrandan kapatabilirsiniz.
+**İzin ve raporu yalnızca siz girersiniz** — *Tercihler* sekmesinde ilgili
+hücreye tıklayarak ya da *Katılım* sekmesindeki "İzin ekle" ile. İzin kesin
+kuraldır: o güne asla nöbet yazılmaz ve doktorun aylık hedefi düşer.
+Telefonla gelen istek/istememe taleplerini de aynı ekrandan doktor adına
+işaretleyebilir, tercih girişini oradan kapatabilirsiniz.
 
 **4. Katılımı gözden geçir** — *Katılım* sekmesi.
 Bu ay kimin görev alacağını, kimin ayın 15'inde ayrılıp kimin 20'sinde
@@ -112,6 +114,78 @@ sabitlenen nöbet yeniden üretimde yerinde kalır.
 
 ---
 
+## Çizelge oluşturulurken uyulan kurallar
+
+### Asla çiğnenmeyen (sert) kurallar
+
+1. **İzinli/raporlu günlere nöbet yazılmaz.** Bu işaret kesin kuraldır ve
+   doktorun aylık hedef saatini de düşürür.
+2. **Görev tarihleri dışına nöbet yazılmaz.** Gece nöbeti ertesi sabaha
+   taştığı için, görev bitiş gününde gece nöbeti verilmez.
+3. **Aynı gün iki vardiya verilmez.**
+4. **Üst üste iki gün nöbet verilmez** — iki nöbet arasında en az bir tam
+   gün boş kalır. *(Ayarlanabilir: `Üst üste en fazla kaç gün nöbet`,
+   varsayılan 1. Bunu 2 yaparsanız ardışık nöbete izin verilir.)*
+5. **İki nöbet arası en az 12 saat dinlenme** bırakılır. Önceki aydan
+   devreden gece nöbeti de hesaba katılır, yani ayın 1'i planlanırken
+   bir önceki ayın son gecesi bilinir. *(Ayarlanabilir.)*
+6. **Aylık nöbet üst sınırı** aşılmaz (genel ayardan ya da kişi bazında
+   Katılım ekranından verilebilir).
+7. **Günün 24 saati boşluksuz kapsanır**, hiçbir nöbet boş bırakılmaz.
+
+Kadro bu kurallar için fazla darsa çizelge yine üretilir; ancak dinlenme veya
+üst üste gün kuralı gevşetilen her nöbet **uyarı olarak bildirilir** —
+sessizce çiğnenmez. Boş kalan slot da kırmızı uyarı olarak görünür.
+
+> 4 doktorluk kadroya kadar (31 günde kişi başı ~15,5 nöbet) hiçbir kural
+> gevşetilmeden eksiksiz çizelge üretildiği testlerle doğrulanmıştır.
+
+### Elden geldiğince gözetilenler (yumuşak hedefler)
+
+- Dört etiketin hedeften sapması (kareli ceza — büyük sapmalar çok daha
+  ağır cezalandırılır)
+- Nöbet, gece ve hafta sonu **sayılarının** dengesi
+- "İstemiyorum" günlerinden kaçınmak, "istiyorum" günlerini tercih etmek
+- Nöbetlerin aya dengeli yayılması (birbirine yakın nöbetler cezalandırılır)
+- Gündüz/gece ağırlıklı çalışma tercihi
+
+Bu kuralların güncel hâli, kendi ayarlarınıza göre yazılmış olarak
+**Ayarlar → Çalışma kuralları** ekranının altında da listelenir.
+
+### İzin ve rapor yetkisi
+
+Doktorlar kendi ekranlarından yalnızca **istiyorum** ve **istemiyorum**
+işaretleyebilir. **İzin/rapor kaydını sadece yönetici girebilir** —
+sunucu, doktordan gelen izin işaretlerini kabul etmez. Yöneticinin girdiği
+izin günleri doktorun ekranında kırmızı ve salt okunur görünür; doktor
+kendi tercihlerini kaydettiğinde bu kayıtlar silinmez.
+
+---
+
+## Sunucusuz deneme sürümü
+
+Kurulumla uğraşmadan arayüzü denemek için tek dosyalık bir sürüm üretilir:
+
+```bash
+node tools/build-demo.js
+# demo/nobet-cizelgesi-demo.html
+```
+
+Dosyayı çift tıklayıp tarayıcıda açmanız yeterli — sunucu, kurulum ve
+internet gerekmez. Motorun tamamı (saat hesabı, adalet, çözücü) tarayıcıda
+gerçek hâliyle çalışır; yalnızca depolama katmanı `localStorage`'a alınır.
+
+| | |
+|---|---|
+| Yönetici | `admin` / `admin` |
+| Doktorlar | `d01` / `d01` … `d08` / `d08` |
+
+Demo sürümünün bilinçli sınırları: parolalar düz metindir, veri yalnızca o
+tarayıcıda durur ve CSV indirme kapalıdır. Gerçek kullanım için
+`node server/index.js` ile çalıştırın.
+
+---
+
 ## Ayarlar
 
 **Vardiya düzeni.** Varsayılan düzen kullanıcının tarif ettiği şekildedir:
@@ -131,8 +205,9 @@ kapsandığını** denetler; kapsama boşluğu bırakan bir düzen kaydedilemez.
 Alışılmadık giriş saatleri (örneğin gece 03:00) uyarı üretir.
 
 **Çalışma kuralları.** İki nöbet arası en az dinlenme (varsayılan 12 saat),
-üst üste en fazla kaç gün nöbet tutulabileceği (varsayılan 2), aylık nöbet üst
-sınırı ve devir telafi oranı.
+üst üste en fazla kaç gün nöbet tutulabileceği (varsayılan 1 — yani ardışık
+gün yok), aylık nöbet üst sınırı ve devir telafi oranı. Bu ekranın altında,
+o anki ayarlarınıza göre yazılmış kural özeti yer alır.
 
 **Öncelikler.** Tercihlere verilen ağırlık düşük/normal/yüksek seçilebilir.
 Yüksekte istenmeyen günler daha kararlı korunur, karşılığında saat dağılımında
@@ -227,8 +302,12 @@ engine/          Çizelge motoru (arayüzden ve sunucudan bağımsız, saf hesap
   slots.js       Nöbet üretimi + dört etiketli saat hesabı (sweep-line)
   fairness.js    Ağırlıklar, hedefler, devir defteri
   scheduler.js   Sert kurallar, maliyet fonksiyonu, çözücü
+  policy.js      Tercih girişi yetki kuralları (izin yalnızca yöneticide)
   index.js       Motor giriş noktası
 server/          HTTP sunucusu ve REST API (harici bağımlılık yok)
 public/          Tarayıcı arayüzü (derleme adımı yok)
-test/            38 test — motor, adalet hesabı ve uçtan uca API
+  state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
+  demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
+tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
+test/            42 test — motor, kurallar, adalet hesabı ve uçtan uca API
 ```

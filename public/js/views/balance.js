@@ -4,7 +4,7 @@
  */
 
 import { deviationBar, fmtDateShort, fmtHours, fmtSigned, h, segmented } from '../core.js';
-import { render, state } from '../app.js';
+import { render, state } from '../state.js';
 import { doctorName } from './schedule.js';
 
 const VIEWS = [

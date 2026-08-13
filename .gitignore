@@ -7,3 +7,6 @@ node_modules/
 npm-debug.log*
 .DS_Store
 *.log
+
+# Uretilen tek dosyalik demo (node tools/build-demo.js ile yeniden uretilir)
+/demo/

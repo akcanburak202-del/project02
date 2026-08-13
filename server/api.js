@@ -24,7 +24,8 @@ import {
   validateTemplates,
 } from '../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../engine/slots.js';
-import { candidatesForSlot, checkSwap, stateFromAssignments } from '../engine/scheduler.js';
+import { candidatesForSlot, checkSwap } from '../engine/scheduler.js';
+import { applyPreferenceUpdate } from '../engine/policy.js';
 import { addDays, monthId as makeMonthId } from '../engine/calendar.js';
 import { load, logAction, update } from './store.js';
 import {
@@ -293,17 +294,6 @@ function sanitizeParticipants(list, db) {
   });
 }
 
-const PREF_VALUES = new Set(['want', 'avoid', 'off']);
-
-function sanitizePreferences(prefs) {
-  const out = {};
-  for (const [iso, value] of Object.entries(prefs || {})) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
-    if (!PREF_VALUES.has(value)) continue;
-    out[iso] = value;
-  }
-  return out;
-}
 
 /* ------------------------------------------------------------------ */
 /* Yonlendirme                                                         */
@@ -823,15 +813,20 @@ route('GET', '/api/ledger', (ctx) => {
 route('PUT', '/api/months/:id/preferences', (ctx) => {
   requireAuth(ctx);
   const body = ctx.body || {};
-  const targetId = body.doctorId && ctx.user.role === 'admin' ? body.doctorId : ctx.user.id;
+  const isAdmin = ctx.user.role === 'admin';
+  const targetId = body.doctorId && isAdmin ? body.doctorId : ctx.user.id;
   return update((db) => {
     const month = getMonth(db, ctx.params.id);
-    if (ctx.user.role !== 'admin') {
+    if (!isAdmin) {
       if (month.prefWindowOpen === false) throw bad('Tercih girişi bu ay için kapatıldı.');
       if (month.status === 'final') throw bad('Bu ay kesinleştirildi, tercih değiştirilemez.');
     }
     month.preferences = { ...(month.preferences || {}) };
-    month.preferences[targetId] = sanitizePreferences(body.preferences);
+    month.preferences[targetId] = applyPreferenceUpdate(
+      month.preferences[targetId],
+      body.preferences,
+      { isAdmin },
+    );
     logAction(db, {
       userId: ctx.user.id,
       userName: ctx.user.name,

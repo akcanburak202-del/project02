@@ -5,10 +5,11 @@
 import {
   DAY_SHORT, api, fmtDate, fmtDateShort, fmtHours, fmtSigned, h, icon, segmented, toast, todayIso, trMonthLabel,
 } from '../core.js';
-import { render, state, withBusy } from '../app.js';
+import { render, state, withBusy } from '../state.js';
 
-const CYCLE = { undefined: 'want', want: 'avoid', avoid: 'off', off: null };
-const LABEL = { want: 'İstiyorum', avoid: 'İstemiyorum', off: 'İzinliyim' };
+// Doktor yalnizca "istiyorum" ve "istemiyorum" isaretleyebilir.
+// Izin/rapor (off) sadece yonetici tarafindan girilir; doktora salt okunur gorunur.
+const CYCLE = { undefined: 'want', want: 'avoid', avoid: null };
 
 function draftPrefs(ws) {
   if (state.myPrefMonth !== ws.month.id || !state.myPrefs) {
@@ -33,11 +34,14 @@ function preferenceCard(ws) {
   for (const day of ws.days) {
     const value = prefs[day.iso];
     const past = day.iso < today;
+    const izinli = value === 'off'; // yonetici tarafindan girilmis, degistirilemez
     cells.push(h('button', {
-      class: ['pref-day', day.type === 'weekend' && 'we', value, past && 'past'].filter(Boolean).join(' '),
+      class: ['pref-day', day.type === 'weekend' && 'we', value, (past || izinli) && 'past'].filter(Boolean).join(' '),
       type: 'button',
-      disabled: !editable || past,
-      title: past ? 'Geçmiş gün' : 'Tıkla: istiyorum → istemiyorum → izinliyim → temiz',
+      disabled: !editable || past || izinli,
+      title: izinli
+        ? 'İzin/rapor kaydı — yalnızca sorumlu hekim değiştirebilir'
+        : past ? 'Geçmiş gün' : 'Tıkla: istiyorum → istemiyorum → temiz',
       onClick: () => {
         const next = CYCLE[prefs[day.iso]];
         if (next) prefs[day.iso] = next;
@@ -48,7 +52,8 @@ function preferenceCard(ws) {
     },
       h('span', { class: 'n' }, day.day),
       h('span', { class: 'lbl' }, DAY_SHORT[day.weekday]),
-      value && h('span', { class: 'lbl' }, value === 'want' ? '✓ istiyorum' : value === 'avoid' ? '× istemiyorum' : 'İzinli')));
+      value && h('span', { class: 'lbl' },
+        value === 'want' ? '✓ istiyorum' : value === 'avoid' ? '× istemiyorum' : 'izinli')));
   }
 
   const save = async () => {
@@ -86,9 +91,10 @@ function preferenceCard(ws) {
       h('div', { class: 'legend' },
         h('span', null, h('b', { style: { background: 'var(--ok-soft)', border: '1px solid #a5d9b7' } }), 'İstiyorum — mümkünse bu güne yaz'),
         h('span', null, h('b', { style: { background: 'var(--warn-soft)', border: '1px solid #edcd9c' } }), 'İstemiyorum — mümkünse yazma'),
-        h('span', null, h('b', { style: { background: 'var(--danger-soft)', border: '1px solid #efb9b9' } }), 'İzinliyim — kesinlikle yazma')),
+        h('span', null, h('b', { style: { background: 'var(--danger-soft)', border: '1px solid #efb9b9' } }), 'İzinli/raporlu — sorumlu hekim girer')),
       h('div', { class: 'small muted mt-8' },
-        '"İzinliyim" kesin kuraldır ve aylık hedef saatini düşürür. Diğer iki işaret, eşit dağılımı bozmadığı ölçüde karşılanır.')),
+        'İki işaret de eşit dağılımı bozmadığı ölçüde karşılanır. ',
+        'İzin ve rapor kayıtlarını yalnızca sorumlu hekim girebilir; kırmızı işaretli günler size bilgi olarak gösterilir.')),
   );
 }
 

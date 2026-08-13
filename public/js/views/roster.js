@@ -4,7 +4,7 @@
  */
 
 import { api, fmtDate, fmtHours, h, openModal } from '../core.js';
-import { applyWorkspace, render, state, withBusy } from '../app.js';
+import { applyWorkspace, render, state, withBusy } from '../state.js';
 
 function draft() {
   // Uzerinde calisilan kopya: kaydedene kadar sunucuya gitmez.

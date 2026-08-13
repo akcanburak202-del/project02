@@ -57,6 +57,15 @@ export function mount(node, ...children) {
 /* ----------------------------- API -------------------------------- */
 
 async function request(method, path, body) {
+  // Sunucusuz demo surumunde istekler tarayici ici arka uca gider.
+  // (public/js/demo-api.js yalnizca demo paketine dahil edilir.)
+  if (typeof window !== 'undefined' && window.__NOBET_BACKEND__) {
+    try {
+      return await window.__NOBET_BACKEND__(method, path, body);
+    } catch (err) {
+      throw new Error(err?.message || 'Beklenmeyen hata');
+    }
+  }
   const res = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},

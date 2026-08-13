@@ -6,7 +6,7 @@ import {
   DAY_SHORT, api, confirmDialog, deviationBar, fmtDate, fmtDateTime, fmtHours, fmtSigned,
   h, icon, openModal, toast, todayIso, trMonthLabel,
 } from '../core.js';
-import { applyWorkspace, refreshMonths, render, state, withBusy } from '../app.js';
+import { applyWorkspace, refreshMonths, render, state, withBusy } from '../state.js';
 
 export function doctorLabel(ws, id, { short = true } = {}) {
   const d = ws.doctors?.[id];

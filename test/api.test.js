@@ -111,23 +111,23 @@ test('doktor kendi tercihini kaydeder, baskasininkini goremez', async () => {
   const me = login.data.user.id;
 
   const save = await call('PUT', '/api/months/2026-08/preferences', {
-    preferences: { '2026-08-14': 'off', '2026-08-15': 'avoid', '2026-08-22': 'want' },
+    preferences: { '2026-08-15': 'avoid', '2026-08-22': 'want' },
   });
   assert.equal(save.status, 200);
 
   const ws = await call('GET', '/api/months/2026-08');
   assert.deepEqual(Object.keys(ws.data.preferences), [me]);
-  assert.equal(ws.data.preferences[me]['2026-08-14'], 'off');
+  assert.equal(ws.data.preferences[me]['2026-08-15'], 'avoid');
 
   // Doktor baska bir doktorun tercihini yazamaz: doctorId yok sayilir ve
   // kayit yine kendi uzerine yapilir.
   const other = await call('PUT', '/api/months/2026-08/preferences', {
-    doctorId: 'baska-doktor', preferences: { '2026-08-02': 'off' },
+    doctorId: 'baska-doktor', preferences: { '2026-08-02': 'avoid' },
   });
   assert.equal(other.status, 200);
   const check = await call('GET', '/api/months/2026-08');
   assert.deepEqual(Object.keys(check.data.preferences), [me]);
-  assert.equal(check.data.preferences[me]['2026-08-02'], 'off');
+  assert.equal(check.data.preferences[me]['2026-08-02'], 'avoid');
 
   // Doktor yonetici uclarina erisemez
   const forbidden = await call('POST', '/api/months/2026-08/generate', {});
@@ -135,13 +135,19 @@ test('doktor kendi tercihini kaydeder, baskasininkini goremez', async () => {
 
   // Asil tercihleri geri yaz (kayit tam degisim semantigi tasir)
   const restore = await call('PUT', '/api/months/2026-08/preferences', {
-    preferences: { '2026-08-14': 'off', '2026-08-15': 'avoid', '2026-08-22': 'want' },
+    preferences: { '2026-08-15': 'avoid', '2026-08-22': 'want' },
   });
   assert.equal(restore.status, 200);
 
   cookie = adminCookie;
 
-  // Yonetici, baska bir doktorun tercihini onun adina girebilir
+  // Izin/rapor kaydini yalnizca yonetici girebilir
+  const izin = await call('PUT', '/api/months/2026-08/preferences', {
+    doctorId: me, preferences: { '2026-08-14': 'off', '2026-08-15': 'avoid', '2026-08-22': 'want' },
+  });
+  assert.equal(izin.data.preferences['2026-08-14'], 'off');
+
+  // Yonetici, baska bir doktorun tercihini de onun adina girebilir
   const doctors = (await call('GET', '/api/doctors')).data.doctors;
   const test1 = doctors.find((d) => d.username === 'test1');
   const byAdmin = await call('PUT', '/api/months/2026-08/preferences', {
@@ -150,6 +156,52 @@ test('doktor kendi tercihini kaydeder, baskasininkini goremez', async () => {
   assert.equal(byAdmin.status, 200);
   const full = await call('GET', '/api/months/2026-08');
   assert.equal(full.data.preferences[test1.id]['2026-08-09'], 'off');
+});
+
+test('doktor kendine izin/rapor isaretleyemez', async () => {
+  const adminCookie = cookie;
+  cookie = '';
+  await call('POST', '/api/login', { username: 'test4', password: 'parola123' });
+  const me = (await call('GET', '/api/me')).data.user.id;
+
+  const out = await call('PUT', '/api/months/2026-08/preferences', {
+    preferences: { '2026-08-05': 'off', '2026-08-06': 'avoid', '2026-08-07': 'want' },
+  });
+  assert.equal(out.status, 200);
+  // "off" sessizce dusurulur, digerleri kaydedilir
+  assert.equal(out.data.preferences['2026-08-05'], undefined);
+  assert.equal(out.data.preferences['2026-08-06'], 'avoid');
+  assert.equal(out.data.preferences['2026-08-07'], 'want');
+
+  cookie = adminCookie;
+  const ws = (await call('GET', '/api/months/2026-08')).data;
+  assert.equal(ws.preferences[me]['2026-08-05'], undefined, 'doktorun izin isareti kaydedilmis');
+});
+
+test('yoneticinin girdigi izin, doktorun kaydiyla silinmez', async () => {
+  const adminCookie = cookie;
+  const doctors = (await call('GET', '/api/doctors')).data.doctors;
+  const test4 = doctors.find((d) => d.username === 'test4');
+
+  // Yonetici izin/rapor giriyor
+  const set = await call('PUT', '/api/months/2026-08/preferences', {
+    doctorId: test4.id,
+    preferences: { '2026-08-06': 'avoid', '2026-08-07': 'want', '2026-08-12': 'off', '2026-08-13': 'off' },
+  });
+  assert.equal(set.data.preferences['2026-08-12'], 'off');
+
+  // Doktor kendi tercihlerini yeniden kaydediyor (izin gunlerini gondermeden)
+  cookie = '';
+  await call('POST', '/api/login', { username: 'test4', password: 'parola123' });
+  const saved = await call('PUT', '/api/months/2026-08/preferences', {
+    preferences: { '2026-08-20': 'want' },
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.preferences['2026-08-20'], 'want');
+  assert.equal(saved.data.preferences['2026-08-12'], 'off', 'yoneticinin izni silinmis');
+  assert.equal(saved.data.preferences['2026-08-13'], 'off', 'yoneticinin izni silinmis');
+
+  cookie = adminCookie;
 });
 
 test('yeniden uretimde izinli gunler kesinlikle bos kalir', async () => {

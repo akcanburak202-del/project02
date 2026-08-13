@@ -255,6 +255,41 @@ test('nobetler aya yayilir, kume olusturmaz', () => {
   }
 });
 
+test('SERT KURAL: iki nobet arasinda en az bir tam gun bosluk kalir', () => {
+  // Kadro daraldikca kural zorlanir; 4 doktor teorik alt sinira yakindir
+  // (62 nobet / 4 = 15,5 nobet, ayda en fazla 16 gun calisilabilir).
+  for (const n of [10, 8, 6, 5, 4]) {
+    const doctors = makeDoctors(n);
+    const ids = Object.keys(doctors);
+    const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+
+    assert.equal(out.report.unassigned.length, 0, `${n} doktor: bos slot kaldi`);
+    assert.deepEqual(
+      out.warnings.filter((w) => w.level !== 'info'),
+      [],
+      `${n} doktor: kural gevsetildi`,
+    );
+    for (const row of out.report.rows) {
+      for (let i = 1; i < row.dates.length; i += 1) {
+        const gap = diffDays(row.dates[i], row.dates[i - 1]);
+        assert.ok(gap >= 2, `${n} doktor / ${row.doctorId}: ${row.dates[i - 1]} ve ${row.dates[i]} ust uste`);
+      }
+    }
+  }
+});
+
+test('ust uste gun kurali gevsetilirse ardisik nobet mumkun olur', () => {
+  // Kural ayarlanabilir olmali: 2 verildiginde ardisik gune izin verilir.
+  const doctors = makeDoctors(8);
+  const ids = Object.keys(doctors);
+  const gevsek = { ...settings, rules: { maxConsecutiveDays: 2 } };
+  const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings: gevsek });
+  assert.equal(out.report.unassigned.length, 0);
+  // Kural gevsek olsa da yayilma cezasi yuzunden pratikte nadir gorulur;
+  // burada onemli olan cozucunun bunu hata saymamasi.
+  assert.deepEqual(out.warnings.filter((w) => w.level === 'error'), []);
+});
+
 test('buildContext hedeflerin toplamini ayin toplamina esitler', () => {
   const doctors = makeDoctors(7);
   const ids = Object.keys(doctors);
