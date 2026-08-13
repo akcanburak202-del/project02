@@ -18,7 +18,9 @@
  * denetlenebilir ve tekrar uretilebilir olmasi icin bilincli bir tercihtir.
  */
 
-import { CATEGORY_KEYS, refreshPlanSlots, refreshPlanWindow } from './slots.js';
+import { CATEGORY_KEYS, EFFECTIVE_KEYS, PRESENCE_KEYS, refreshPlanSlots, refreshPlanWindow } from './slots.js';
+
+const NCAT = CATEGORY_KEYS.length;
 import {
   FLEXIBILITY_WEIGHTS, affectedDays, isDayValid, planDeviationHours,
   readVariable, timeVariables, writeVariable,
@@ -30,13 +32,20 @@ import { clonePlan, createPlan } from './shiftplan.js';
 
 export const DEFAULT_WEIGHTS = {
   fairness: 1,
-  categoryWeights: { wdSolo: 1, wdShared: 1, weSolo: 1.4, weShared: 1.4 },
+  // Fiili mesai birincil olcuttur: havuzu sabit (gunde 24 sa) oldugu icin
+  // gercekten esitlenebilir. Bulunma saatleri ikincil olarak gozetilir.
+  categoryWeights: {
+    effWd: 3, effWe: 4,
+    wdSolo: 0.4, wdShared: 0.4, weSolo: 0.5, weShared: 0.5,
+  },
   shiftCount: 2,
   // Kategoriler tek tek dengelense bile sapmalar ayni doktorda ayni yonde
-  // birikebilir; bu terim dogrudan TOPLAM saati hedefe cekerek bunu onler.
-  totalHours: 2,
-  // Nobet sayisi tavani sert kuraldir; taban altina inmek agir cezalidir.
-  shiftCountFloor: 80,
+  // birikebilir; bu terimler dogrudan TOPLAMI hedefe cekerek bunu onler.
+  totalEffective: 6,
+  totalHours: 1,
+  // Beklenen nobet sayisinin taban/tavan araligi disina cikma cezasi.
+  // Kacinilabilir her durumda uyulacak kadar buyuk, cikmaza sokmayacak kadar yumusak.
+  shiftCountBand: 250,
   nightCount: 1,
   weekendCount: 1.5,
   avoidDay: 40,
@@ -131,7 +140,7 @@ export function prepare({
   const slotDay = new Int32Array(nSlots);
   const slotIsNight = new Uint8Array(nSlots);
   const slotIsWeekend = new Uint8Array(nSlots);
-  const slotCat = new Float64Array(nSlots * 4);
+  const slotCat = new Float64Array(nSlots * NCAT);
   const slotIndexById = new Map();
   const dayIndexByIso = new Map(days.map((d, i) => [d.iso, i]));
 
@@ -142,15 +151,15 @@ export function prepare({
     slotDay[i] = dayIndexByIso.get(slot.date) ?? 0;
     slotIsNight[i] = slot.crossesMidnight ? 1 : 0;
     slotIsWeekend[i] = slot.dayType === 'weekend' ? 1 : 0;
-    for (let c = 0; c < 4; c += 1) slotCat[i * 4 + c] = slot.cat[CATEGORY_KEYS[c]] || 0;
+    for (let c = 0; c < NCAT; c += 1) slotCat[i * NCAT + c] = slot.cat[CATEGORY_KEYS[c]] || 0;
   });
 
   // --- Doktor bazli sabit veriler ---
   const availSets = active.map((p) => availableDates(p, days, preferences[p.doctorId]));
-  const targets = new Float64Array(nDoctors * 4);
+  const targets = new Float64Array(nDoctors * NCAT);
   doctorIds.forEach((id, d) => {
     const entry = targetMap.get(id);
-    for (let c = 0; c < 4; c += 1) targets[d * 4 + c] = entry.target[CATEGORY_KEYS[c]];
+    for (let c = 0; c < NCAT; c += 1) targets[d * NCAT + c] = entry.target[CATEGORY_KEYS[c]];
   });
 
   const sumWeight = doctorIds.reduce((s, id) => s + weightMap.get(id).weight, 0) || 1;
@@ -167,9 +176,14 @@ export function prepare({
   });
 
   // --- Nobet sayisi siniri ---
-  // 62 nobet 8 doktora bolunmuyorsa kimse 7 veya 8'den baska bir sayi
-  // almamali. Beklenen degerin tavani SERT sinir olarak uygulanir; boylece
-  // "birine 9 nobet" gibi sonuclar yapisal olarak imkansizlasir.
+  // 62 nobet 8 doktora bolunmuyorsa kimse 7 veya 8'den baska bir sayi almamali.
+  //
+  // Bu sinir SERT DEGIL, cok guclu bir yumusak kisittir. Sert yapilirsa cozucu
+  // cikmaza girebilir: acgozlu asama birini tavana dayadiginda o slotu baska
+  // kimse alamaz ve tavlama da oradan cikamaz (her ara adim gecersiz olur).
+  // Guclu ceza, ara adimlardan gecerek onarim yapmaya izin verirken cezanin
+  // buyuklugu sayesinde kacinilabilir her durumda sinira uyulmasini saglar.
+  // Yoneticinin elle girdigi aylik ust sinir ise sert kalir.
   const countCap = new Float64Array(nDoctors);
   const countFloor = new Float64Array(nDoctors);
   const EPS = 1e-9;
@@ -182,10 +196,9 @@ export function prepare({
   active.forEach((p, d) => {
     const own = Number(p.maxShifts);
     const global = Number(R.maxShiftsPerMonth);
-    let cap = countCap[d];
-    if (Number.isFinite(own) && own > 0) cap = Math.min(cap, own);
-    else if (Number.isFinite(global) && global > 0) cap = Math.min(cap, global);
-    maxShifts[d] = cap;
+    if (Number.isFinite(own) && own > 0) maxShifts[d] = own;
+    else if (Number.isFinite(global) && global > 0) maxShifts[d] = global;
+    else maxShifts[d] = Infinity;
   });
 
   // --- Sert kural on-hesabi: musaitlik / gorev bitisi ---
@@ -251,8 +264,11 @@ export function prepare({
   const minRestMin = Math.max(0, Number(R.minRestHours || 0)) * 60;
   const maxConsecutive = Math.max(1, Number(R.maxConsecutiveDays || 1));
 
-  const catW = new Float64Array(4);
-  for (let c = 0; c < 4; c += 1) catW[c] = (W.categoryWeights[CATEGORY_KEYS[c]] ?? 1) * W.fairness;
+  const catW = new Float64Array(NCAT);
+  for (let c = 0; c < NCAT; c += 1) catW[c] = (W.categoryWeights[CATEGORY_KEYS[c]] ?? 1) * W.fairness;
+  // Hangi indeksler fiili mesai, hangileri bulunma saati
+  const effIdx = EFFECTIVE_KEYS.map((k) => CATEGORY_KEYS.indexOf(k));
+  const presIdx = PRESENCE_KEYS.map((k) => CATEGORY_KEYS.indexOf(k));
 
   // Statik uygunluk listesi (aday havuzlari)
   const eligibility = [];
@@ -268,7 +284,7 @@ export function prepare({
     slotStart, slotEnd, slotDay, slotIsNight, slotIsWeekend, slotCat, slotIndexById, dayIndexByIso,
     targets, expShifts, expNight, expWeekend, maxShifts, countCap, countFloor,
     staticOk, staticReasonCode, prefCost, wantHit, wantTotal,
-    carryByDoctor, minRestMin, maxConsecutive, catW,
+    carryByDoctor, minRestMin, maxConsecutive, catW, effIdx, presIdx, NCAT,
     eligibility, availSets,
     rules: R, weights: W, weightMap, targetMap,
     ledger, weightSum: sumWeight,
@@ -301,14 +317,14 @@ export function prepare({
         const slot = slots[i];
         ctx.slotStart[i] = slot.startMin;
         ctx.slotEnd[i] = slot.endMin;
-        for (let c = 0; c < 4; c += 1) ctx.slotCat[i * 4 + c] = slot.cat[CATEGORY_KEYS[c]] || 0;
+        for (let c = 0; c < NCAT; c += 1) ctx.slotCat[i * NCAT + c] = slot.cat[CATEGORY_KEYS[c]] || 0;
       }
       // Toplamlar degisti -> herkesin hedefi yeniden hesaplanir
       const nextTargets = computeTargets(built.totals, weightMap, ledger, { maxCarryRatio: R.maxCarryRatio });
       ctx.targetMap = nextTargets;
       doctorIds.forEach((id, d) => {
         const entry = nextTargets.get(id);
-        for (let c = 0; c < 4; c += 1) ctx.targets[d * 4 + c] = entry.target[CATEGORY_KEYS[c]];
+        for (let c = 0; c < NCAT; c += 1) ctx.targets[d * NCAT + c] = entry.target[CATEGORY_KEYS[c]];
       });
       ctx.totals = built.totals;
     };
@@ -448,8 +464,9 @@ export function violations(ctx, state, d, si) {
   return reasons;
 }
 
-// Sicak dongude yeniden kullanilan tampon (tahsis yapmamak icin)
+// Sicak dongude yeniden kullanilan tamponlar (tahsis yapmamak icin)
 const dayScratch = new Int32Array(64);
+const catScratch = new Float64Array(NCAT);
 
 /** Tek bir doktorun mevcut atamalarindan dogan maliyet. */
 export function doctorCost(ctx, state, d) {
@@ -457,10 +474,8 @@ export function doctorCost(ctx, state, d) {
   const mine = state.byDoctor[d];
   const n = mine.length;
 
-  let c0 = 0;
-  let c1 = 0;
-  let c2 = 0;
-  let c3 = 0;
+  const acc = catScratch;
+  acc.fill(0);
   let night = 0;
   let weekend = 0;
   let pref = 0;
@@ -470,11 +485,8 @@ export function doctorCost(ctx, state, d) {
 
   for (let k = 0; k < n; k += 1) {
     const si = mine[k];
-    const o = si * 4;
-    c0 += ctx.slotCat[o];
-    c1 += ctx.slotCat[o + 1];
-    c2 += ctx.slotCat[o + 2];
-    c3 += ctx.slotCat[o + 3];
+    const o = si * NCAT;
+    for (let c = 0; c < NCAT; c += 1) acc[c] += ctx.slotCat[o + c];
     night += ctx.slotIsNight[si];
     weekend += ctx.slotIsWeekend[si];
     pref += ctx.prefCost[base + si];
@@ -484,31 +496,39 @@ export function doctorCost(ctx, state, d) {
 
   if (ctx.wantTotal[d] > wantMatched) pref += (ctx.wantTotal[d] - wantMatched) * W.wantMissed;
 
-  const t = d * 4;
-  const d0 = c0 - ctx.targets[t];
-  const d1 = c1 - ctx.targets[t + 1];
-  const d2 = c2 - ctx.targets[t + 2];
-  const d3 = c3 - ctx.targets[t + 3];
-  let cost =
-    ctx.catW[0] * d0 * d0 +
-    ctx.catW[1] * d1 * d1 +
-    ctx.catW[2] * d2 * d2 +
-    ctx.catW[3] * d3 * d3;
+  const t = d * NCAT;
+  let cost = 0;
+  for (let c = 0; c < NCAT; c += 1) {
+    const diff = acc[c] - ctx.targets[t + c];
+    cost += ctx.catW[c] * diff * diff;
+  }
 
   const ds = n - ctx.expShifts[d];
   const dn = night - ctx.expNight[d];
   const dw = weekend - ctx.expWeekend[d];
   cost += W.shiftCount * ds * ds + W.nightCount * dn * dn + W.weekendCount * dw * dw;
 
-  // Toplam saat: kategori sapmalari ayni yonde birikmesin
-  const dt = (c0 + c1 + c2 + c3)
-    - (ctx.targets[t] + ctx.targets[t + 1] + ctx.targets[t + 2] + ctx.targets[t + 3]);
-  cost += W.totalHours * dt * dt;
+  // Toplamlar: kategori sapmalari ayni yonde birikmesin.
+  // Fiili mesai toplami birincil, bulunma saati toplami ikincil.
+  let effA = 0;
+  let effT = 0;
+  for (const c of ctx.effIdx) { effA += acc[c]; effT += ctx.targets[t + c]; }
+  const de = effA - effT;
+  cost += W.totalEffective * de * de;
 
-  // Beklenen nobet sayisinin tabani altina inmek agir cezali
+  let presA = 0;
+  let presT = 0;
+  for (const c of ctx.presIdx) { presA += acc[c]; presT += ctx.targets[t + c]; }
+  const dp = presA - presT;
+  cost += W.totalHours * dp * dp;
+
+  // Beklenen nobet sayisinin taban/tavan araligi disina cikmak agir cezali
   if (n < ctx.countFloor[d]) {
     const eksik = ctx.countFloor[d] - n;
-    cost += W.shiftCountFloor * eksik * eksik;
+    cost += W.shiftCountBand * eksik * eksik;
+  } else if (n > ctx.countCap[d]) {
+    const fazla = n - ctx.countCap[d];
+    cost += W.shiftCountBand * fazla * fazla;
   }
 
   cost += pref;
@@ -917,7 +937,7 @@ export function candidatesForSlot(ctx, assignments, slotId) {
   // olarak gosterilir; ham maliyet degerinden cok daha anlasilirdir.
   const targetTotal = (d) => {
     let sum = 0;
-    for (let c = 0; c < 4; c += 1) sum += ctx.targets[d * 4 + c];
+    for (const c of ctx.presIdx) sum += ctx.targets[d * NCAT + c];
     return sum;
   };
   const actualTotal = (d) => {

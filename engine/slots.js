@@ -24,17 +24,35 @@ import { MIN_PER_DAY, formatRange, parseTime, toHours } from './time.js';
 import { daysInMonth, dayTypeOf, isoFromIndex, weekdayOf, DAY_SHORT, DAY_NAMES } from './calendar.js';
 import { planIntervals } from './shiftplan.js';
 
+/**
+ * Olculen buyuklukler iki gruba ayrilir:
+ *
+ * FIILI MESAI (effective) — bir saatin is yuku 1 birimdir; o an hastanede kac
+ *   doktor varsa aralarinda boluşur. Tek basinaysa 1, iki kisiyseniz 0,5.
+ *   Kritik ozellik: gunluk toplam fiili mesai, vardiya duzeni NE OLURSA OLSUN
+ *   tam 24 saattir. Havuz sabit oldugu icin bu buyukluk gercekten esitlenebilir.
+ *
+ * BULUNMA (presence) — hastanede fiilen gecirilen sure. Paylasimli/paylasimsiz
+ *   ayrimiyla raporlanir; toplam havuzu vardiya duzenine gore degistigi icin
+ *   tam esitlenmesi yapisal olarak mumkun degildir.
+ */
 export const CATEGORIES = [
-  { key: 'wdSolo', label: 'Hafta içi paylaşımsız', short: 'Hİ tek' },
-  { key: 'wdShared', label: 'Hafta içi paylaşımlı', short: 'Hİ ort' },
-  { key: 'weSolo', label: 'Hafta sonu paylaşımsız', short: 'HS tek' },
-  { key: 'weShared', label: 'Hafta sonu paylaşımlı', short: 'HS ort' },
+  { key: 'effWd', label: 'Fiilî mesai — hafta içi', short: 'Fiilî Hİ', group: 'effective' },
+  { key: 'effWe', label: 'Fiilî mesai — hafta sonu', short: 'Fiilî HS', group: 'effective' },
+  { key: 'wdSolo', label: 'Hafta içi paylaşımsız', short: 'Hİ tek', group: 'presence' },
+  { key: 'wdShared', label: 'Hafta içi paylaşımlı', short: 'Hİ ort', group: 'presence' },
+  { key: 'weSolo', label: 'Hafta sonu paylaşımsız', short: 'HS tek', group: 'presence' },
+  { key: 'weShared', label: 'Hafta sonu paylaşımlı', short: 'HS ort', group: 'presence' },
 ];
 
 export const CATEGORY_KEYS = CATEGORIES.map((c) => c.key);
+export const EFFECTIVE_KEYS = CATEGORIES.filter((c) => c.group === 'effective').map((c) => c.key);
+export const PRESENCE_KEYS = CATEGORIES.filter((c) => c.group === 'presence').map((c) => c.key);
 
 export function emptyCategoryVector() {
-  return { wdSolo: 0, wdShared: 0, weSolo: 0, weShared: 0 };
+  const out = {};
+  for (const key of CATEGORY_KEYS) out[key] = 0;
+  return out;
 }
 
 export function addVector(target, source, factor = 1) {
@@ -213,14 +231,17 @@ export function computeCategories(all, { year, month, calOpts, totalDays, only =
       continue;
     }
 
+    const weekend = isWeekendDay(dayIndex);
     const shared = covering.length > 1;
-    const key = isWeekendDay(dayIndex)
-      ? (shared ? 'weShared' : 'weSolo')
-      : (shared ? 'wdShared' : 'wdSolo');
+    const key = weekend ? (shared ? 'weShared' : 'weSolo') : (shared ? 'wdShared' : 'wdSolo');
+    const effKey = weekend ? 'effWe' : 'effWd';
     const hours = span / 60;
+    // Fiili mesai: o anki is yuku hastanedeki doktor sayisina bolunur.
+    const effHours = hours / covering.length;
     for (const slot of covering) {
       if (updating && !updating.has(slot)) continue;
       slot.cat[key] += hours;
+      slot.cat[effKey] += effHours;
       if (shared) slot.sharedMin += span;
       else slot.soloMin += span;
     }
@@ -284,6 +305,7 @@ export function buildSlots({ year, month, shiftTemplates, weekendDays = [0, 6], 
     slot.hours = slot.durationMin / 60;
     slot.soloHours = slot.soloMin / 60;
     slot.sharedHours = slot.sharedMin / 60;
+    slot.effectiveHours = slot.cat.effWd + slot.cat.effWe;
     slot.isNight = slot.crossesMidnight;
     delete slot.soloMin;
     delete slot.sharedMin;
@@ -355,6 +377,7 @@ export function buildSlotsFromPlan({ year, month, days, plan, weekendDays = [0, 
     slot.hours = slot.durationMin / 60;
     slot.soloHours = slot.soloMin / 60;
     slot.sharedHours = slot.sharedMin / 60;
+    slot.effectiveHours = slot.cat.effWd + slot.cat.effWe;
     slot.isNight = slot.crossesMidnight;
     delete slot.soloMin;
     delete slot.sharedMin;
@@ -473,6 +496,7 @@ export function refreshPlanWindow(built, { year, month, weekendDays = [0, 6], ho
     slot.hours = slot.durationMin / 60;
     slot.soloHours = slot.soloMin / 60;
     slot.sharedHours = slot.sharedMin / 60;
+    slot.effectiveHours = slot.cat.effWd + slot.cat.effWe;
     slot.isNight = slot.crossesMidnight;
     if (slot.inMonth) addVector(built.totals, slot.cat);
   }

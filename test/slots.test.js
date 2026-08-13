@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSlots, validateTemplates, vectorTotal } from '../engine/slots.js';
+import { buildSlots, validateTemplates, PRESENCE_KEYS, EFFECTIVE_KEYS } from '../engine/slots.js';
+
+const bulunma = (vec) => PRESENCE_KEYS.reduce((s, k) => s + (vec[k] || 0), 0);
+const fiili = (vec) => EFFECTIVE_KEYS.reduce((s, k) => s + (vec[k] || 0), 0);
 import { parseTime, formatRange } from '../engine/time.js';
 import { DEFAULT_SHIFT_TEMPLATES } from '../engine/index.js';
 
@@ -76,16 +79,42 @@ test('ayin ilk ve son gunu de eksiksiz hesaplanir', () => {
   const sonGece = built.slots.find((s) => s.id === '2026-08-31#gece');
   // 31 Agustos Pazartesi gecesi 1 Eylul sabahina tasar, o saatler de sayilir
   assert.equal(sonGece.hours, 18);
-  assert.equal(vectorTotal(sonGece.cat), 18);
+  assert.equal(bulunma(sonGece.cat), 18);
+  // Fiili mesai: 9 sa paylasimli (yarisi) + 9 sa tek = 13,5 sa
+  assert.equal(fiili(sonGece.cat), 13.5);
 });
 
 test('tum slotlarin saat toplami ay toplamina esit', () => {
   const built = buildSlots({ year: 2026, month: 8, shiftTemplates: DEFAULT_SHIFT_TEMPLATES });
-  const sum = built.slots.reduce((acc, s) => acc + vectorTotal(s.cat), 0);
-  assert.ok(Math.abs(sum - vectorTotal(built.totals)) < 1e-9);
+  const sum = built.slots.reduce((acc, s) => acc + bulunma(s.cat), 0);
+  assert.ok(Math.abs(sum - bulunma(built.totals)) < 1e-9);
   // 31 gun x (15 + 18) saat
   assert.equal(sum, 31 * 33);
   assert.equal(built.warnings.length, 0);
+});
+
+test('FIILI MESAI havuzu vardiya duzeninden bagimsiz olarak gunde 24 saattir', () => {
+  // Bu degismezlik, fiili mesainin gercekten esitlenebilmesinin nedenidir:
+  // her an is yuku 1 birimdir ve hastanedeki doktor sayisina bolunur.
+  const duzenler = [
+    // klasik ikili
+    { weekday: [{ id: 'g', label: 'G', start: '09:00', end: '24:00' }, { id: 'n', label: 'N', start: '15:00', end: '09:00+1' }] },
+    // tek nobetci 24 saat
+    { weekday: [{ id: 'a', label: 'A', start: '09:00', end: '09:00+1' }] },
+    // iki kisi de 24 saat
+    { weekday: [{ id: 'a', label: 'A', start: '09:00', end: '09:00+1' }, { id: 'b', label: 'B', start: '09:00', end: '09:00+1' }] },
+    // uclu kademeli
+    { weekday: [
+      { id: 'a', label: 'A', start: '08:00', end: '20:00' },
+      { id: 'b', label: 'B', start: '14:00', end: '02:00+1' },
+      { id: 'c', label: 'C', start: '20:00', end: '08:00+1' }] },
+  ];
+  for (const d of duzenler) {
+    const built = buildSlots({ year: 2026, month: 8, shiftTemplates: { weekday: d.weekday, weekend: d.weekday } });
+    assert.equal(built.warnings.length, 0, 'kapsama boslugu');
+    const toplam = fiili(built.totals);
+    assert.ok(Math.abs(toplam - 31 * 24) < 1e-9, `fiili mesai toplami ${toplam}, beklenen ${31 * 24}`);
+  }
 });
 
 test('kapsama boslugu olan sablon hata verir', () => {

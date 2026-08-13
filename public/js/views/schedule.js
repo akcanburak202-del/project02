@@ -439,7 +439,9 @@ function calendar() {
 
 function sidePanel() {
   const ws = state.ws;
-  const rows = [...ws.report.rows].sort((a, b) => b.totalHours - a.totalHours);
+  const effKeys = (ws.categories || []).filter((c) => c.group === 'effective').map((c) => c.key);
+  const eff = (vec) => effKeys.reduce((a, k) => a + (vec[k] || 0), 0);
+  const rows = [...ws.report.rows].sort((a, b) => eff(b.actual) - eff(a.actual));
   const issues = [
     ...(ws.report.issues || []),
     ...(ws.warnings || []).filter((w) => w.level !== 'info'),
@@ -449,17 +451,20 @@ function sidePanel() {
     h('div', { class: 'card' },
       h('div', { class: 'card-head' },
         h('h3', { class: 'grow' }, 'Denge'),
-        h('span', { class: 'small muted' }, `ort. sapma ${fmtHours(ws.report.meanAbsDeviation)} sa`)),
+        h('span', { class: 'small muted', title: 'Fiilî mesai = bulunma saati / o an hastanedeki doktor sayısı' }, 'fiilî mesai')),
       h('div', { class: 'card-body' },
-        rows.map((r) => h('div', { class: 'mini-row' },
-          h('div', null,
-            h('div', { class: 'mini-name' }, doctorName(ws, r.doctorId)),
-            h('div', { class: 'mini-sub' },
-              `${r.shifts} nöbet · ${fmtHours(r.totalHours)}/${fmtHours(r.targetTotalHours)} sa`)),
-          h('div', { class: 'row', style: { gap: '6px' } },
-            h('span', { class: 'mini-sub nowrap', style: { minWidth: '38px', textAlign: 'right' } },
-              fmtSigned(r.totalHours - r.targetTotalHours)),
-            deviationBar(r.totalHours - r.targetTotalHours, 16)))))),
+        rows.map((r) => {
+          const a = eff(r.actual);
+          const t = eff(r.target);
+          return h('div', { class: 'mini-row' },
+            h('div', null,
+              h('div', { class: 'mini-name' }, doctorName(ws, r.doctorId)),
+              h('div', { class: 'mini-sub' },
+                `${r.shifts} nöbet · ${fmtHours(a)}/${fmtHours(t)} sa · bulunma ${fmtHours(r.totalHours)}`)),
+            h('div', { class: 'row', style: { gap: '6px' } },
+              h('span', { class: 'mini-sub nowrap', style: { minWidth: '38px', textAlign: 'right' } }, fmtSigned(a - t)),
+              deviationBar(a - t, 6)));
+        }))),
 
     h('div', { class: 'card' },
       h('div', { class: 'card-head' },

@@ -115,14 +115,18 @@ function myShiftsCard(ws) {
     h('div', { class: 'card-head' },
       h('h3', { class: 'grow' }, 'Nöbetlerim'),
       h('span', { class: 'chip chip-info' }, `${mine.length} nöbet`),
-      row && h('span', { class: 'chip' }, `${fmtHours(row.totalHours)} saat`),
+      row && h('span', { class: 'chip chip-ok', title: 'Fiilî mesai — bulunma saatinin görevli sayısına bölünmüş hâli' },
+        `${fmtHours((ws.categories || []).filter((c) => c.group === 'effective')
+          .reduce((a, c) => a + (row.actual[c.key] || 0), 0))} sa fiilî`),
+      row && h('span', { class: 'chip' }, `${fmtHours(row.totalHours)} sa hastanede`),
       h('a', { class: 'btn btn-sm', href: `/api/months/${ws.month.id}/export?kind=schedule` }, 'CSV')),
     h('div', { class: 'card-body tight' },
       mine.length
         ? h('table', null,
           h('thead', null, h('tr', null,
             h('th', null, 'Tarih'), h('th', null, 'Gün'), h('th', null, 'Vardiya'),
-            h('th', null, 'Giriş–Çıkış'), h('th', { class: 'num' }, 'Süre'), h('th', null, 'Birlikte'))),
+            h('th', null, 'Giriş–Çıkış'), h('th', { class: 'num' }, 'Süre'),
+            h('th', { class: 'num' }, 'Fiilî'), h('th', null, 'Birlikte'))),
           h('tbody', null, mine.map((s) => {
             const day = ws.days.find((d) => d.iso === s.date);
             const partners = ws.slots
@@ -137,14 +141,22 @@ function myShiftsCard(ws) {
               h('td', null, s.label),
               h('td', { class: 'mono' }, s.timeLabel),
               h('td', { class: 'num' }, fmtHours(s.hours)),
+              h('td', { class: 'num', style: { fontWeight: 600 } }, fmtHours(s.effectiveHours)),
               h('td', { class: 'small muted' }, partners.join(', ') || '—'));
           })))
         : h('div', { class: 'card-body' }, h('div', { class: 'small muted' }, 'Bu ay nöbetin görünmüyor.'))),
     row && h('div', { class: 'card-body', style: { borderTop: '1px solid var(--border)' } },
+      h('div', { class: 'small muted mb-8' },
+        'Fiilî mesai: hastanede geçirilen sürenin, o an görevli doktor sayısına bölünmüş hâli. ',
+        'Tek başınayken 1 saat = 1 saat, iki kişiyken 1 saat = 0,5 saat sayılır.'),
       h('div', { class: 'row-wrap gap-16' },
-        ws.categories.map((c) => h('div', null,
+        ws.categories.map((c) => h('div', {
+          style: c.group === 'effective' ? {} : { opacity: .62 },
+        },
           h('div', { class: 'small muted' }, c.label),
-          h('div', { style: { fontWeight: 700, fontSize: '16px' } }, `${fmtHours(row.actual[c.key])} sa`),
+          h('div', {
+            style: { fontWeight: 700, fontSize: '16px', color: c.group === 'effective' ? 'var(--primary-dark)' : undefined },
+          }, `${fmtHours(row.actual[c.key])} sa`),
           h('div', { class: 'small muted' }, `hedef ${fmtHours(row.target[c.key])} · ${fmtSigned(row.deviation[c.key])}`))))),
   );
 }

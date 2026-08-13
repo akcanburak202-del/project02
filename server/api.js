@@ -243,7 +243,8 @@ export function monthWorkspace(db, id) {
     days: built.days,
     slots: built.slots.map((s) => ({
       id: s.id, date: s.date, day: s.day, label: s.label, templateId: s.templateId,
-      timeLabel: s.timeLabel, hours: s.hours, isNight: s.isNight, dayType: s.dayType,
+      timeLabel: s.timeLabel, hours: s.hours, effectiveHours: s.effectiveHours,
+      isNight: s.isNight, dayType: s.dayType,
       color: s.color, cat: s.cat,
     })),
     totals: built.totals,

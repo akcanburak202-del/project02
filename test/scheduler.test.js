@@ -8,7 +8,10 @@ import {
   updateLedger,
   vectorTotal,
 } from '../engine/index.js';
-import { CATEGORY_KEYS } from '../engine/slots.js';
+import { CATEGORY_KEYS, EFFECTIVE_KEYS, PRESENCE_KEYS } from '../engine/slots.js';
+
+const fiili = (vec) => EFFECTIVE_KEYS.reduce((s, k) => s + (vec[k] || 0), 0);
+const bulunma = (vec) => PRESENCE_KEYS.reduce((s, k) => s + (vec[k] || 0), 0);
 import { diffDays } from '../engine/calendar.js';
 
 function makeDoctors(n) {
@@ -197,10 +200,10 @@ test('devir defteri sonraki ayda dengelemeyi saglar ve borcu kapatir', () => {
   const doctors = makeDoctors(8);
   const ids = Object.keys(doctors);
 
-  // d01 gecmiste her kategoride 6 saat fazla calismis olsun
+  // d01 gecmiste fiili mesai olarak fazla calismis olsun (birincil olcut)
   const ledger = {
-    d01: { wdSolo: 6, wdShared: 6, weSolo: 3, weShared: 3 },
-    d02: { wdSolo: -6, wdShared: -6, weSolo: -3, weShared: -3 },
+    d01: { effWd: 6, effWe: 3 },
+    d02: { effWd: -6, effWe: -3 },
   };
   const out = generateSchedule({ month: makeMonth('2026-09', ids), doctors, settings, ledger });
 
@@ -213,8 +216,8 @@ test('devir defteri sonraki ayda dengelemeyi saglar ve borcu kapatir', () => {
 
   // Ay kesinlestiginde defter sifira yaklasmali
   const next = updateLedger(ledger, out.report);
-  const oncekiBorc = Math.abs(ledger.d01.wdSolo);
-  const sonrakiBorc = Math.abs(next.d01.wdSolo);
+  const oncekiBorc = Math.abs(ledger.d01.effWd);
+  const sonrakiBorc = Math.abs(next.d01.effWd);
   assert.ok(sonrakiBorc < oncekiBorc, `borc kapanmadi: ${oncekiBorc} -> ${sonrakiBorc}`);
 });
 
@@ -327,17 +330,31 @@ test('nobet sayilari teorik minimum yayilimda kalir (taban/tavan disina cikilmaz
   }
 });
 
-test('toplam saatler hedefe cok yakin kalir', () => {
-  // Kategoriler tek tek dengelense bile sapmalar ayni doktorda birikebilir;
-  // toplam saat terimi bunu engellemeli.
+test('FIILI MESAI neredeyse tam esit dagilir', () => {
+  // Fiili mesai havuzu sabit (gunde 24 sa) oldugu icin bu buyukluk gercekten
+  // esitlenebilir; birincil adalet olcutu budur.
   const doctors = makeDoctors(8);
   const ids = Object.keys(doctors);
   const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
 
-  const fark = out.report.rows.map((r) => r.totalHours - r.targetTotalHours);
-  const yayilim = Math.max(...fark) - Math.min(...fark);
-  assert.ok(yayilim <= 2, `toplam saat yayilimi ${yayilim.toFixed(2)} sa`);
-  for (const f of fark) assert.ok(Math.abs(f) <= 1.5, `bir doktor hedeften ${f.toFixed(2)} sa sapmis`);
+  const eff = out.report.rows.map((r) => fiili(r.actual));
+  const yayilim = Math.max(...eff) - Math.min(...eff);
+  assert.ok(yayilim <= 1, `fiili mesai yayilimi ${yayilim.toFixed(2)} sa`);
+
+  // Havuz: 31 gun x 24 sa, 8 doktora bolunur
+  const hedef = (31 * 24) / 8;
+  for (const e of eff) {
+    assert.ok(Math.abs(e - hedef) <= 0.75, `bir doktorun fiili mesaisi ${e.toFixed(2)} (hedef ${hedef})`);
+  }
+});
+
+test('bulunma saatleri de makul araliktadir', () => {
+  const doctors = makeDoctors(8);
+  const ids = Object.keys(doctors);
+  const out = generateSchedule({ month: makeMonth('2026-08', ids), doctors, settings });
+  const pres = out.report.rows.map((r) => bulunma(r.actual));
+  const yayilim = Math.max(...pres) - Math.min(...pres);
+  assert.ok(yayilim <= 4, `bulunma saati yayilimi ${yayilim.toFixed(2)} sa`);
 });
 
 test('yarim zamanli ve ay ortasi katilan/ayrilan kadroda da sinirlar tutar', () => {
@@ -361,8 +378,8 @@ test('yarim zamanli ve ay ortasi katilan/ayrilan kadroda da sinirlar tutar', () 
       `${row.doctorId}: ${row.shifts} nobet (beklenen ${row.expectedShifts.toFixed(2)}, izinli ${taban}–${tavan})`,
     );
     assert.ok(
-      Math.abs(row.totalHours - row.targetTotalHours) <= 2,
-      `${row.doctorId}: hedeften ${(row.totalHours - row.targetTotalHours).toFixed(2)} sa sapma`,
+      Math.abs(bulunma(row.actual) - bulunma(row.target)) <= 3,
+      `${row.doctorId}: bulunma saati hedeften ${(bulunma(row.actual) - bulunma(row.target)).toFixed(2)} sa sapmis`,
     );
   }
 });

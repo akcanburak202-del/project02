@@ -18,6 +18,9 @@ export function renderBalance() {
   const ws = state.ws;
   const view = state.balanceView || 'hours';
   const cats = ws.categories;
+  const effCats = cats.filter((c) => c.group === 'effective');
+  const presCats = cats.filter((c) => c.group !== 'effective');
+  const topla = (vec, list) => list.reduce((a, c) => a + (vec[c.key] || 0), 0);
   const rows = [...ws.report.rows].sort((a, b) =>
     doctorName(ws, a.doctorId).localeCompare(doctorName(ws, b.doctorId), 'tr'));
 
@@ -26,35 +29,44 @@ export function renderBalance() {
 
   let table;
   if (view === 'hours') {
+    const effHedef = (r) => topla(r.target, effCats);
     table = h('table', null,
-      h('thead', null, h('tr', null,
-        h('th', null, 'Doktor'),
-        h('th', { class: 'num' }, 'Nöbet'),
-        h('th', { class: 'num' }, 'Gece'),
-        h('th', { class: 'num' }, 'H.sonu'),
-        cats.map((c) => h('th', { class: 'num', title: c.label }, c.short)),
-        h('th', { class: 'num' }, 'Toplam'),
-        h('th', { class: 'num' }, 'Hedef'),
-        h('th', null, 'Fark'))),
-      h('tbody', null, rows.map((r) => h('tr', null,
-        h('td', null, h('div', { style: { fontWeight: 600 } }, doctorName(ws, r.doctorId)),
-          r.availableDays < ws.days.length &&
-            h('div', { class: 'small muted' }, `${r.availableDays}/${ws.days.length} gün görevli`)),
-        h('td', { class: 'num' }, r.shifts),
-        h('td', { class: 'num' }, r.nightShifts),
-        h('td', { class: 'num' }, r.weekendShifts),
-        cats.map((c) => h('td', { class: 'num' }, fmtHours(r.actual[c.key]))),
-        h('td', { class: 'num', style: { fontWeight: 700 } }, fmtHours(r.totalHours)),
-        h('td', { class: 'num muted' }, fmtHours(r.targetTotalHours)),
-        h('td', null, deviationBar(r.totalHours - r.targetTotalHours, 16))))),
+      h('thead', null,
+        h('tr', null,
+          h('th', null, 'Doktor'),
+          h('th', { class: 'num' }, 'Nöbet'),
+          h('th', { class: 'num' }, 'Gece'),
+          h('th', { class: 'num' }, 'H.sonu'),
+          effCats.map((c) => h('th', { class: 'num', title: c.label }, c.short)),
+          h('th', { class: 'num' }, 'FİİLÎ TOPLAM'),
+          h('th', null, 'Fark'),
+          presCats.map((c) => h('th', { class: 'num muted', title: c.label }, c.short)),
+          h('th', { class: 'num muted' }, 'Bulunma'))),
+      h('tbody', null, rows.map((r) => {
+        const eff = topla(r.actual, effCats);
+        return h('tr', null,
+          h('td', null, h('div', { style: { fontWeight: 600 } }, doctorName(ws, r.doctorId)),
+            r.availableDays < ws.days.length &&
+              h('div', { class: 'small muted' }, `${r.availableDays}/${ws.days.length} gün görevli`)),
+          h('td', { class: 'num' }, r.shifts),
+          h('td', { class: 'num' }, r.nightShifts),
+          h('td', { class: 'num' }, r.weekendShifts),
+          effCats.map((c) => h('td', { class: 'num' }, fmtHours(r.actual[c.key]))),
+          h('td', { class: 'num', style: { fontWeight: 700 } }, fmtHours(eff)),
+          h('td', null, deviationBar(eff - effHedef(r), 6)),
+          presCats.map((c) => h('td', { class: 'num muted' }, fmtHours(r.actual[c.key]))),
+          h('td', { class: 'num muted' }, fmtHours(topla(r.actual, presCats))));
+      })),
       h('tfoot', null, h('tr', null,
         h('th', null, 'Toplam'),
         h('th', { class: 'num' }, rows.reduce((s, r) => s + r.shifts, 0)),
         h('th', { class: 'num' }, rows.reduce((s, r) => s + r.nightShifts, 0)),
         h('th', { class: 'num' }, rows.reduce((s, r) => s + r.weekendShifts, 0)),
-        totalsRow((r) => r.actual),
-        h('th', { class: 'num' }, fmtHours(rows.reduce((s, r) => s + r.totalHours, 0))),
-        h('th', null), h('th', null))));
+        effCats.map((c) => h('th', { class: 'num' }, fmtHours(rows.reduce((s, r) => s + r.actual[c.key], 0)))),
+        h('th', { class: 'num' }, fmtHours(rows.reduce((s, r) => s + topla(r.actual, effCats), 0))),
+        h('th', null),
+        presCats.map((c) => h('th', { class: 'num muted' }, fmtHours(rows.reduce((s, r) => s + r.actual[c.key], 0)))),
+        h('th', { class: 'num muted' }, fmtHours(rows.reduce((s, r) => s + topla(r.actual, presCats), 0))))));
   } else if (view === 'deviation') {
     table = h('table', null,
       h('thead', null, h('tr', null,
@@ -99,7 +111,7 @@ export function renderBalance() {
   }
 
   const explanation = {
-    hours: 'Her doktorun ay içinde aldığı saatler dört etikete ayrılmış hâlde. "Hedef", görev süresi ve devir defteri dikkate alınarak hesaplanan adil paydır.',
+    hours: 'FİİLÎ MESAİ birincil ölçüttür: bir saatin iş yükü, o an hastanedeki doktor sayısına bölünür (tek başınaysa 1, iki kişiyseniz 0,5). Günlük toplamı vardiya düzeninden bağımsız olarak tam 24 saat olduğu için gerçekten eşitlenebilir. Sağdaki soluk sütunlar hastanede fiilen geçirilen süredir; havuzu düzene göre değiştiğinden tam eşitlenemez.',
     deviation: 'Etiket bazında gerçekleşen ile hedef arasındaki fark. Küçük farklar kaçınılmazdır (bir nöbet bölünemez); ay kesinleştiğinde bu farklar devir defterine yazılır ve sonraki aylarda kapatılır.',
     ledger: 'Geçmiş aylardan devreden fazla (+) veya eksik (−) saatler. Yeni ay planlanırken hedefler bu birikime göre ters yönde kaydırılır.',
     shifts: 'Doktor bazlı nöbet tarihleri. Hafta sonu ve tatil günleri turuncu gösterilir.',
@@ -123,12 +135,16 @@ export function renderBalance() {
       h('div', { class: 'card-head' }, h('h3', null, 'Ayın toplam saatleri')),
       h('div', { class: 'card-body' },
         h('div', { class: 'row-wrap gap-16' },
-          cats.map((c) => h('div', null,
+          effCats.map((c) => h('div', null,
             h('div', { class: 'small muted' }, c.label),
             h('div', { style: { fontSize: '19px', fontWeight: 700 } }, `${fmtHours(ws.totals[c.key])} sa`))),
           h('div', null,
-            h('div', { class: 'small muted' }, 'Toplam'),
-            h('div', { style: { fontSize: '19px', fontWeight: 700 } },
-              `${fmtHours(cats.reduce((s, c) => s + ws.totals[c.key], 0))} sa`))))),
+            h('div', { class: 'small muted' }, 'Fiilî mesai toplamı'),
+            h('div', { style: { fontSize: '19px', fontWeight: 700, color: 'var(--primary-dark)' } },
+              `${fmtHours(topla(ws.totals, effCats))} sa`),
+            h('div', { class: 'small muted' }, `${ws.days.length} gün × 24 sa — düzenden bağımsız sabit`)),
+          h('div', null,
+            h('div', { class: 'small muted' }, 'Hastanede bulunma toplamı'),
+            h('div', { style: { fontSize: '19px', fontWeight: 700 } }, `${fmtHours(topla(ws.totals, presCats))} sa`))))),
   );
 }
