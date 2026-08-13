@@ -11,8 +11,60 @@ const VIEWS = [
   { value: 'hours', label: 'Saat dağılımı' },
   { value: 'deviation', label: 'Hedeften sapma' },
   { value: 'ledger', label: 'Devir defteri' },
+  { value: 'rhythm', label: 'Ritim' },
   { value: 'shifts', label: 'Nöbet listesi' },
 ];
+
+const GUN_ADI = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
+
+/**
+ * RITIM GORUNUMU — saat tablosunda gorunmeyen esitsizlik.
+ *
+ * Saatler tipatip esit olsa bile o saatlerin gunlere nasil dustugu kisiden
+ * kisiye cok farkli olabilir: birinin haftasina uc nobet duserken bir
+ * baskasininki bos gecer, ya da biri aylardir hep carsambalari tutar.
+ * Bu tablo tam olarak bunu gosterir.
+ */
+function rhythmTable(ws, rows) {
+  const r = ws.rhythm || { current: {}, history: {}, windowMonths: 6 };
+  const gecmisVar = Object.keys(r.history || {}).length > 0;
+
+  const gecmisDegerleri = (wd) => rows
+    .map((row) => r.history?.[row.doctorId]?.weekday?.[wd] || 0);
+
+  return h('table', null,
+    h('thead', null, h('tr', null,
+      h('th', null, 'Doktor'),
+      h('th', { class: 'num', title: '7 günlük herhangi bir pencerede adil payın üzerine taşan nöbet sayısı' },
+        'Bu ay yoğun hafta'),
+      h('th', { class: 'num' }, 'Bu ay nöbet'),
+      gecmisVar && GUN_ADI.map((a, wd) => h('th', { class: 'num muted', title: `Son ${r.windowMonths} ayda ${a} günü tutulan nöbet` }, a)),
+      gecmisVar && h('th', { class: 'num muted' }, `Son ${r.windowMonths} ay`))),
+    h('tbody', null, rows.map((row) => {
+      const bu = r.current?.[row.doctorId] || { denseExcess: 0, shifts: 0 };
+      const gec = r.history?.[row.doctorId];
+      return h('tr', null,
+        h('td', null, doctorName(ws, row.doctorId)),
+        h('td', { class: 'num' }, bu.denseExcess
+          ? h('span', { class: bu.denseExcess > 1 ? 'chip chip-warn' : 'chip' }, String(bu.denseExcess))
+          : '—'),
+        h('td', { class: 'num' }, String(bu.shifts || 0)),
+        gecmisVar && GUN_ADI.map((_, wd) => {
+          const v = gec?.weekday?.[wd] || 0;
+          const hepsi = gecmisDegerleri(wd);
+          const ort = hepsi.reduce((a, b) => a + b, 0) / (hepsi.length || 1);
+          const sapma = v - ort;
+          return h('td', {
+            class: 'num',
+            style: Math.abs(sapma) >= 1.5
+              ? { fontWeight: 700, color: sapma > 0 ? 'var(--warn)' : 'var(--primary-dark)' }
+              : { color: 'var(--muted)' },
+            title: `ortalama ${ort.toFixed(1)}`,
+          }, String(v));
+        }),
+        gecmisVar && h('td', { class: 'num muted' }, String(gec?.shifts || 0)));
+    })));
+}
 
 export function renderBalance() {
   const ws = state.ws;
@@ -92,6 +144,8 @@ export function renderBalance() {
           cats.map((c) => h('td', { class: 'num' }, fmtSigned(r.ledger[c.key] || 0))),
           h('td', { class: 'num', style: { fontWeight: 700 } }, fmtSigned(total)));
       })));
+  } else if (view === 'rhythm') {
+    table = rhythmTable(ws, rows);
   } else {
     table = h('table', null,
       h('thead', null, h('tr', null,
@@ -114,6 +168,7 @@ export function renderBalance() {
     hours: 'FİİLÎ MESAİ birincil ölçüttür: bir saatin iş yükü, o an hastanedeki doktor sayısına bölünür (tek başınaysa 1, iki kişiyseniz 0,5). Günlük toplamı vardiya düzeninden bağımsız olarak tam 24 saat olduğu için gerçekten eşitlenebilir. Sağdaki soluk sütunlar hastanede fiilen geçirilen süredir; havuzu düzene göre değiştiğinden tam eşitlenemez.',
     deviation: 'Etiket bazında gerçekleşen ile hedef arasındaki fark. Küçük farklar kaçınılmazdır (bir nöbet bölünemez); ay kesinleştiğinde bu farklar devir defterine yazılır ve sonraki aylarda kapatılır.',
     ledger: 'Geçmiş aylardan devreden fazla (+) veya eksik (−) saatler. Yeni ay planlanırken hedefler bu birikime göre ters yönde kaydırılır.',
+    rhythm: 'Saatler eşit olsa bile GÜNLER eşit düşmeyebilir. "Yoğun hafta", 7 günlük herhangi bir pencerede adil payın üzerine taşan nöbet sayısıdır. Sağdaki sütunlar son ayların haftagünü dağılımıdır; ortalamadan belirgin sapanlar renklendirilir (turuncu: fazla aldı, mavi: az aldı). Çizelge üretilirken bu birikim hesaba katılır, böylece aynı yük hep aynı kişide kalmaz. Kişinin kendi tercihi her zaman bunun önündedir.',
     shifts: 'Doktor bazlı nöbet tarihleri. Hafta sonu ve tatil günleri turuncu gösterilir.',
   };
 

@@ -37,7 +37,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 62 test: motor, saat planı, kurallar, adalet ve uçtan uca API
+npm test                      # 89 test: motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -391,10 +391,58 @@ sessizce çiğnenmez. Boş kalan slot da kırmızı uyarı olarak görünür.
 - Nöbet, gece ve hafta sonu **sayılarının** dengesi
 - "İstemiyorum" günlerinden kaçınmak, "istiyorum" günlerini tercih etmek
 - Nöbetlerin aya dengeli yayılması (birbirine yakın nöbetler cezalandırılır)
+- **Haftalık yoğunluk** — 7 günlük kayan pencerede adil payın üzerine nöbet
+  yığılmaması (aşağıya bakınız)
+- **Aylar arası ritim** — aynı haftagününün ve yoğun haftaların hep aynı kişiye
+  denk gelmemesi (aşağıya bakınız)
 - Gündüz/gece ağırlıklı çalışma tercihi
 
 Bu kuralların güncel hâli, kendi ayarlarınıza göre yazılmış olarak
 **Ayarlar → Çalışma kuralları** ekranının altında da listelenir.
+
+### Yoğunluk ve ritim — saat tablosunda görünmeyen eşitsizlik
+
+Saatler tıpatıp eşit olsa bile o saatlerin **günlere** nasıl düştüğü kişiden
+kişiye çok farklı olabilir. İki ayrı sorun var ve ikisi de saat tablosunda
+görünmez:
+
+1. **Birinin haftası ağır, birininki hafif.** İki nöbet arasındaki mesafe
+   kuralı yalnızca *komşu* iki nöbete bakar; haftanın tamamını görmez. 2-2-2
+   günlük aralıklar (bir haftada dört nöbet) ile 2-6-2 aralıkları oradan
+   neredeyse aynı görünür, oysa yaşanan yük çok farklıdır.
+2. **Aylar boyu hep aynı kişiye denk gelmesi.** Bir ayda her haftagününden
+   yalnızca dört-beş tane vardır; hepsini herkese eşit dağıtamazsınız. Bu
+   yüzden ölçü ay değil, **aylar** olmalıdır.
+
+**Ölçüm (8 doktor, hiç tercih verisi yok, bu özellikler eklenmeden önce):**
+
+| | önce | sonra |
+|---|---|---|
+| Bir haftaya düşen en çok nöbet (aylık) | 4 | 3 |
+| 12 ayda en büyük haftagünü farkı | **11** (biri 19 çarşamba, biri 8) | **5** |
+| 12 ayda yoğun hafta yükü farkı | 7 (3–10) | 3 (6–9) |
+
+Bunun bedeli ölçülebilir düzeyde yok: aylık fiilî mesai yayılımı ortalaması
+0,563 sa'ten 0,583 sa'e çıktı, nöbet sayısı dengesi hiç değişmedi.
+
+**Nasıl çalışır.** Geçmiş ayların atamalarından iki büyüklük çıkarılır: kim
+hangi haftagününde kaç nöbet tuttu, ve 7 günlük pencerelerde adil payın
+üzerine kaç nöbet taştı. Yeni ayın çözümünde, geçmişte ortalamanın üzerinde
+yük almış doktor için aynı yönde bir nöbet almak biraz daha pahalıdır. Fark
+kendiliğinden kapanır — devir defteriyle aynı mantık, farklı bir büyüklükte.
+
+**Kişinin kendi tercihi her zaman önce gelir.** Bir gün için açık bir tercih
+(*istiyorum* / *istemiyorum*) girilmişse ritim yönlendirmesi o gün için devre
+dışı kalır. Bu bilinçli bir kural: aksi hâlde ritim, tercihi sessizce iptal
+edebiliyordu — ölçümde "hep çarşamba tuttum" geçmişi olan bir doktorun açıkça
+istediği dört çarşambanın dördü de elinden alınıyordu.
+
+**Ayrıca saklanan bir defter yok.** Ritim geçmişi, önceki ayların
+atamalarından her seferinde yeniden hesaplanır (son 6 ay), böylece defterle
+gerçek çizelge birbirinden kayamaz.
+
+Bu tablo **Denge → Ritim** sekmesinde görünür: bu ayın yoğun hafta yükü ve son
+ayların haftagünü dağılımı; ortalamadan belirgin sapanlar renklendirilir.
 
 ### İzin ve rapor yetkisi
 
@@ -535,6 +583,7 @@ engine/          Çizelge motoru (arayüzden ve sunucudan bağımsız, saf hesap
   slots.js       Nöbet üretimi + dört etiketli saat hesabı (sweep-line)
   shiftplan.js   Giriş/çıkış saatlerinin karar modeli (esnek vardiya düzeni)
   patterns.js    Gün desenleri — esnekliği öngörülebilir kılan kütüphane
+  rhythm.js      Yoğunluk ve haftagünü hafızası (aylar arası ritim dengesi)
   propose.js     Desen arama ve önerme (uygulama kararı yöneticinin)
   fairness.js    Ağırlıklar, hedefler, devir defteri
   scheduler.js   Sert kurallar, maliyet fonksiyonu, çözücü
@@ -545,5 +594,5 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            77 test — motor, saat planı, kurallar, adalet ve uçtan uca API
+test/            89 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```

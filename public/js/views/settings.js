@@ -97,6 +97,8 @@ function rulesSummary(s) {
     'Nöbet, gece ve hafta sonu sayıları dengelenir.',
     '"İstemiyorum" günlerinden kaçınılır, "istiyorum" günleri tercih edilir.',
     'Nöbetler aya dengeli yayılır; birbirine çok yakın nöbetler cezalandırılır.',
+    '7 günlük herhangi bir pencerede adil payın üzerine nöbet yığılmaz — kimsenin haftası diğerinden ağır geçmez.',
+    `Son aylarda hangi haftagünlerini ve kaç yoğun haftayı kimin aldığı hatırlanır; yük aylar içinde sırayla dolaşır (Denge → ${'Ritim'}).`,
     'Gündüz/gece ağırlıklı çalışma tercihi gözetilir.',
   ];
   const li = (t) => h('li', { style: { marginBottom: '3px' } }, t);

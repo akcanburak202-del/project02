@@ -28,6 +28,7 @@ import {
 import { availableDates, computeActuals, computeTargets, computeWeights } from './fairness.js';
 import { MIN_PER_DAY } from './time.js';
 import { addDays, diffDays } from './calendar.js';
+import { rhythmBias } from './rhythm.js';
 import { clonePlan } from './shiftplan.js';
 
 export const DEFAULT_WEIGHTS = {
@@ -52,6 +53,14 @@ export const DEFAULT_WEIGHTS = {
   wantDay: 15,
   wantMissed: 3,
   spacing: 1,
+  // Gecmis aylarin ritmi (bkz. rhythm.js): ayni haftagunune / yogun haftaya
+  // tekrar tekrar denk gelmeyi yumusak bicimde onler.
+  weekdayHistory: 3,
+  densityHistory: 1,
+  // Yogun hafta cezasi: 7 gunluk kayan pencerede adil paydan fazla nobet.
+  // "spacing" komsu iki nobet arasina bakar, bu ise HAFTANIN TAMAMINA bakar;
+  // ikisi ayni sey degildir (bkz. asagidaki aciklama).
+  weekDensity: 12,
   consecutiveDays: 25,
   shiftTypePref: 5,
   softViolation: 1000,
@@ -116,6 +125,7 @@ export function prepare({
   doctorsById = {},
   built = null,
   calendarOpts = {},
+  history = null,
 }) {
   const R = { ...DEFAULT_RULES, ...rules };
   const W = {
@@ -192,6 +202,34 @@ export function prepare({
     countFloor[d] = Math.floor(expShifts[d] + EPS);
   });
 
+  // --- Gecmis aylarin ritmi ---
+  // "Hep bana denk geliyor" sorunu tek ay icinde gorulemez; olcu aylardir.
+  // Gecmiste ortalamanin uzerinde belirli bir haftagunu ya da yogun hafta
+  // yuku almis doktor icin ayni yonde nobet almak biraz daha pahalidir.
+  const bias = rhythmBias(history, doctorIds);
+  const slotWeekday = new Int8Array(nSlots);
+  for (let si = 0; si < nSlots; si += 1) {
+    const t = Date.parse(`${slots[si].date}T00:00:00Z`);
+    slotWeekday[si] = Number.isNaN(t) ? 0 : new Date(t).getUTCDay();
+  }
+
+  // --- Haftalik yogunluk payi ---
+  // Bir doktorun 7 gunluk herhangi bir pencerede kac nobeti olabilecegi.
+  // Kisinin kendi aylik payindan turetilir: yarim zamanli calisan icin de
+  // dogru olsun diye sabit bir sayi degil, oranin karsiligi kullanilir.
+  const weekAllow = new Float64Array(nDoctors);
+  doctorIds.forEach((id, d) => {
+    weekAllow[d] = Math.max(1, Math.ceil((expShifts[d] * 7) / (totalDays || 1) - EPS));
+  });
+
+  // Gecmiste ortalamanin ustunde yogun hafta yasamis doktorun bu ayki yogun
+  // hafta cezasi agirlasir; az yasamis olanınki hafifler. Yuk boylece
+  // aylar icinde sirayla dolasir, hep ayni kiside kalmaz.
+  const densityW = new Float64Array(nDoctors);
+  doctorIds.forEach((id, d) => {
+    densityW[d] = W.weekDensity * (1 + W.densityHistory * (bias.empty ? 0 : bias.dense.get(id)));
+  });
+
   const maxShifts = new Float64Array(nDoctors);
   active.forEach((p, d) => {
     const own = Number(p.maxShifts);
@@ -244,6 +282,16 @@ export function prepare({
       }
       if (typePref === 'night' && !slot.crossesMidnight) cost += W.shiftTypePref;
       if (typePref === 'day' && slot.crossesMidnight) cost += W.shiftTypePref;
+      // Gecmiste bu haftagununu fazla almissa +, az almissa - (yumusak yon verir).
+      //
+      // KISININ KENDI TERCIHI HER ZAMAN ONCE GELIR: o gun icin acik bir tercih
+      // (istiyorum / istemiyorum) girilmisse ritim yonlendirmesi devre disi
+      // kalir. Aksi halde ritim, tercihi sessizce iptal edebiliyordu — olcumde
+      // "hep carsamba tuttum" gecmisi olan bir doktorun acikca istedigi dort
+      // carsambanin dordu de elinden aliniyordu.
+      if (!bias.empty && p2 !== 'want' && p2 !== 'avoid') {
+        cost += W.weekdayHistory * bias.weekday.get(p.doctorId)[slotWeekday[si]];
+      }
       prefCost[d * nSlots + si] = cost;
     }
   });
@@ -282,7 +330,7 @@ export function prepare({
     slots, days, totals, participants: active, doctorIds, doctorsById, indexById,
     nDoctors, nSlots, totalDays,
     slotStart, slotEnd, slotDay, slotIsNight, slotIsWeekend, slotCat, slotIndexById, dayIndexByIso,
-    targets, expShifts, expNight, expWeekend, maxShifts, countCap, countFloor,
+    targets, expShifts, expNight, expWeekend, maxShifts, countCap, countFloor, weekAllow, densityW,
     staticOk, staticReasonCode, prefCost, wantHit, wantTotal,
     carryByDoctor, minRestMin, maxConsecutive, catW, effIdx, presIdx, NCAT,
     eligibility, availSets,
@@ -549,6 +597,26 @@ export function doctorCost(ctx, state, d) {
     else if (gap === 2) cost += 5 * W.spacing;
     else if (gap === 3) cost += 2 * W.spacing;
     else if (gap === 4) cost += 0.5 * W.spacing;
+  }
+
+  // Yogun hafta: 7 gunluk kayan pencerede adil paydan fazla nobet.
+  //
+  // NEDEN AYRI BIR TERIM
+  // Yukaridaki "aralik" cezasi yalnizca KOMSU iki nobete bakar; haftanin
+  // tamamini gormez. 8 doktorlu bir ayda 2-2-2 gunluk araliklar (bir haftada
+  // dort nobet) ile 2-6-2 araliklari arasindaki fark buradan kucuk gorunur,
+  // oysa yasanan yuk cok farklidir. Bu terim dogrudan "bir haftaya kac nobet
+  // dustu" sorusunu cezalandirir.
+  //
+  // Pay kisinin kendi aylik payindan turetilir; boylece yarim zamanli calisan
+  // haksiz yere cezalanmaz. Ceza kareseldir: 3 nobetlik bir hafta katlanilir,
+  // 4 nobetlik hafta cok pahalidir.
+  let w = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (w < i) w = i;
+    while (w < n && days[w] < days[i] + 7) w += 1;
+    const fazla = (w - i) - ctx.weekAllow[d];
+    if (fazla > 0) cost += ctx.densityW[d] * fazla * fazla;
   }
 
   return cost;

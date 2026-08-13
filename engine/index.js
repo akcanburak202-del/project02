@@ -22,6 +22,7 @@ import {
   solve,
 } from './scheduler.js';
 import { parseMonthId, monthLabel, monthDays, prevMonthId } from './calendar.js';
+import { monthRhythm } from './rhythm.js';
 
 export {
   CATEGORIES,
@@ -91,7 +92,7 @@ export function resolveSettings(global = {}, override = {}) {
  * @param ledger    { doctorId: kategori vektoru }
  * @param carryOver onceki aydan tasan nobetler
  */
-export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, carryOver = [] }) {
+export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, carryOver = [], history = null }) {
   const { year, month: mm } = parseMonthId(month.id);
   const cfg = resolveSettings(settings, month.settings || {});
   const calendarOpts = { year, month: mm, weekendDays: cfg.weekendDays, holidays: cfg.holidays };
@@ -129,6 +130,7 @@ export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, 
     doctorsById: doctors,
     built,
     calendarOpts,
+    history,
   });
 
   return { ...built, ctx, config: cfg, year, month: mm };
@@ -257,3 +259,22 @@ export function extractCarryOver(prevMonthRecord, prevBuilt) {
 }
 
 export { prevMonthId, parseMonthId, computeTargets, computeWeights, computeActuals, auditAssignments };
+export { mergeRhythm, rhythmBias } from './rhythm.js';
+export { monthRhythm };
+
+/**
+ * Bir ayin cizelgesinden ritim kaydini cikarir (haftagunu dagilimi + yogun
+ * hafta yuku). Sonraki aylarin cozumunde `history` olarak kullanilir.
+ */
+export function extractRhythm(built, assignments) {
+  const { ctx, slots } = built;
+  const actuals = computeActuals(assignments || {}, slots, ctx.doctorIds);
+  const out = {};
+  ctx.doctorIds.forEach((id, d) => {
+    const row = actuals.get(id);
+    if (!row) return;
+    // Ayni gunde birden fazla nobet olamaz; yine de tekrarlari eleyelim.
+    out[id] = monthRhythm([...new Set(row.dates)], ctx.weekAllow[d]);
+  });
+  return out;
+}

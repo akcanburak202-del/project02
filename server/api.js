@@ -16,6 +16,8 @@ import {
   buildContext,
   collectFixed,
   extractCarryOver,
+  extractRhythm,
+  mergeRhythm,
   generateSchedule,
   monthLabel,
   parseMonthId,
@@ -208,18 +210,48 @@ function carryOverFor(db, id, settings) {
   }
 }
 
+/**
+ * Gecmis aylarin ritmi: kim hangi haftagununu ve kac yogun hafta aldi.
+ *
+ * Ayrica saklanmaz — gecmis aylarin atamalarindan her seferinde yeniden
+ * hesaplanir, boylece defterle gercek cizelge birbirinden kayamaz.
+ * Yalnizca son RITIM_PENCERESI ay sayilir: eski gecmis yeni dengeyi
+ * sonsuza kadar sürüklemesin.
+ */
+const RITIM_PENCERESI = 6;
+
+function rhythmHistoryFor(db, id, settings) {
+  const kayitlar = [];
+  let cursor = id;
+  for (let i = 0; i < RITIM_PENCERESI; i += 1) {
+    cursor = prevMonthId(cursor);
+    const prev = db.months[cursor];
+    if (!prev || !Object.keys(prev.assignments || {}).length) continue;
+    try {
+      const built = buildContext({
+        month: prev, doctors: doctorsMap(db), settings, ledger: {}, carryOver: [],
+      });
+      kayitlar.push(extractRhythm(built, prev.assignments));
+    } catch {
+      /* eski ay bugunku ayarlarla kurulamiyorsa atlanir */
+    }
+  }
+  return kayitlar.length ? mergeRhythm(kayitlar) : null;
+}
+
 export function buildMonthContext(db, id) {
   const month = getMonth(db, id);
   const settings = getSettings(db);
   const ledger = ledgerFor(db, id);
   const carryOver = carryOverFor(db, id, settings);
-  const built = buildContext({ month, doctors: doctorsMap(db), settings, ledger, carryOver });
-  return { month, settings, ledger, carryOver, built };
+  const history = rhythmHistoryFor(db, id, settings);
+  const built = buildContext({ month, doctors: doctorsMap(db), settings, ledger, carryOver, history });
+  return { month, settings, ledger, carryOver, history, built };
 }
 
 /** Arayuzun ihtiyac duydugu tum ay verisi. */
 export function monthWorkspace(db, id) {
-  const { month, settings, ledger, built } = buildMonthContext(db, id);
+  const { month, settings, ledger, history, built } = buildMonthContext(db, id);
   const report = analyzeAssignments(built, month.assignments || {}, ledger);
   const templateProblems = built.config.shiftPolicy.mode === 'flexible'
     ? validatePolicy(built.config.shiftPolicy)
@@ -259,6 +291,13 @@ export function monthWorkspace(db, id) {
     ledger,
     config: built.config,
     categories: CATEGORIES,
+    // Ritim: bu ayin yogun hafta yuku + son aylarin haftagunu dagilimi.
+    // "Saatler esit ama gunler hep bana denk geliyor" itirazinin olculebilir hali.
+    rhythm: {
+      current: extractRhythm(built, month.assignments || {}),
+      history: history || {},
+      windowMonths: RITIM_PENCERESI,
+    },
     dayPatterns: month.dayPatterns || {},
     patterns: built.config.shiftPolicy.mode === 'flexible'
       ? built.config.shiftPolicy.enabledPatterns.map((x) => ({
@@ -684,6 +723,7 @@ route('POST', '/api/months/:id/generate', (ctx) => {
     const settings = getSettings(db);
     const ledger = ledgerFor(db, month.id);
     const carryOver = carryOverFor(db, month.id, settings);
+    const history = rhythmHistoryFor(db, month.id, settings);
 
     // "fromDate tarihinden itibaren yeniden planla": oncesi aynen korunur.
     const extraFixed = {};
@@ -698,7 +738,7 @@ route('POST', '/api/months/:id/generate', (ctx) => {
     if (!keepPinned) month.pinned = [];
 
     const out = generateSchedule(
-      { month, doctors: doctorsMap(db), settings, ledger, carryOver },
+      { month, doctors: doctorsMap(db), settings, ledger, carryOver, history },
       {
         seed: Number.isFinite(Number(seed)) && seed !== '' && seed !== null ? Number(seed) : undefined,
         extraFixed,
