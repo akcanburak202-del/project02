@@ -1,0 +1,18 @@
+{
+  "name": "nobet-cizelgesi",
+  "version": "1.0.0",
+  "description": "Acil servis doktorlari icin adil nobet cizelgesi olusturma araci",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js",
+    "reset": "node server/reset.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "private": true
+}

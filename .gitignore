@@ -1,0 +1,9 @@
+# Veri dosyalari (parola ozetleri ve kisisel bilgi icerir — asla depoya girmez)
+/data/
+*.db.json
+
+# Node
+node_modules/
+npm-debug.log*
+.DS_Store
+*.log
