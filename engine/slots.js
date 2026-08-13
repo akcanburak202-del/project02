@@ -23,6 +23,7 @@
 import { MIN_PER_DAY, formatRange, parseTime, toHours } from './time.js';
 import { daysInMonth, dayTypeOf, isoFromIndex, weekdayOf, DAY_SHORT, DAY_NAMES } from './calendar.js';
 import { planIntervals } from './shiftplan.js';
+import { patternIntervals } from './patterns.js';
 
 /**
  * Olculen buyuklukler iki gruba ayrilir:
@@ -394,8 +395,10 @@ export function buildSlotsFromPlan({ year, month, days, plan, weekendDays = [0, 
     message: `${gap.iso} gününde ${formatRange(gap.from % MIN_PER_DAY, gap.to % MIN_PER_DAY)} aralığında kapsama boşluğu var.`,
   }));
 
-  for (const day of days) {
+  for (const [i, day] of days.entries()) {
     day.slotIds = slots.filter((s) => s.date === day.iso).map((s) => s.id);
+    day.patternId = plan.days[i]?.patternId || null;
+    day.patternName = plan.days[i]?.pattern?.name || null;
   }
 
   // Gun bazli indeks: optimizasyon dongusunde yerel guncelleme icin
@@ -420,29 +423,23 @@ function updateDayIntervals(built, dayIndex) {
   if (!list || !list.length) return;
 
   const P = plan.policy;
-  const side = (i) => (days[Math.min(Math.max(i, 0), n - 1)].type === 'weekend' ? P.weekend : P.weekday);
-  const s = side(dayIndex);
-
-  // Hayalet gunler (ay disi) tercih edilen saatlerde sabittir; yalnizca ay
-  // icindeki gunlerin degiskenleri plandan gelir.
+  // Ay disindaki hayalet gunler tercih edilen saatlerde sabittir.
   const inMonth = dayIndex >= 0 && dayIndex < n;
-  const dp = inMonth ? plan.days[dayIndex] : null;
-  const h = dayIndex === -1 ? s.handover.preferred
+  const dp = inMonth ? plan.days[dayIndex] : plan.days[dayIndex < 0 ? 0 : n - 1];
+  const pattern = dp.pattern;
+  const h = dayIndex === -1 ? P.handover.preferred
     : dayIndex === n ? plan.handover[n]
       : plan.handover[dayIndex];
   const hNext = dayIndex === -1 ? plan.handover[0]
-    : dayIndex === n ? s.handover.preferred
+    : dayIndex === n ? P.handover.preferred
       : plan.handover[dayIndex + 1];
-  const arrivals = dp ? dp.arrivals : s.arrivals.map((a) => a.preferred);
-  const exits = dp ? dp.exits : s.exits.map((e) => e.preferred);
-  const k = list.length;
+  const times = inMonth ? dp.times : Int32Array.from(pattern.vars.map((v) => v.preferred));
 
-  for (let i = 0; i < k; i += 1) {
+  const intervals = patternIntervals(pattern, h, hNext, times);
+  for (let i = 0; i < list.length && i < intervals.length; i += 1) {
     const item = list[i];
-    item.startMin = dayIndex * MIN_PER_DAY + (i === 0 ? h : arrivals[i - 1]);
-    item.endMin = i === k - 1
-      ? (dayIndex + 1) * MIN_PER_DAY + hNext
-      : dayIndex * MIN_PER_DAY + exits[i];
+    item.startMin = dayIndex * MIN_PER_DAY + intervals[i].start;
+    item.endMin = dayIndex * MIN_PER_DAY + intervals[i].end;
     item.durationMin = item.endMin - item.startMin;
     item.crossesMidnight = crossesMidnight(item.startMin, item.endMin);
     // Etiket de yenilenmeli: saatler degistiginde eski metin kalirsa

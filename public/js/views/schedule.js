@@ -361,6 +361,75 @@ function toolbar() {
   );
 }
 
+/* --------------------------- Gün deseni --------------------------- */
+
+/**
+ * Gunun duzenini secme penceresi.
+ *
+ * Esneklik ile ongorulebilirligin bulustugu yer burasi: arac saatleri kendi
+ * ayarlar ama gunun KAC KISIYLE ve HANGI SEKILDE gececegi listeyi hazirlayanin
+ * karari olarak kalir. Her desen, uretecegi fiili mesai dagilimiyla birlikte
+ * gosterilir.
+ */
+function openPatternPicker(day) {
+  const ws = state.ws;
+  const secili = ws.dayPatterns?.[day.iso] || null;
+  const gecerli = day.patternId;
+
+  openModal((close) => {
+    const uygula = async (patternId, dates) => {
+      const out = await withBusy(
+        () => api.post(`/api/months/${ws.month.id}/day-pattern`, { dates, patternId }),
+        { success: 'Gün deseni uygulandı' },
+      );
+      if (!out) return;
+      close();
+      applyWorkspace(out);
+    };
+
+    const ayniTip = ws.days.filter((d) => d.type === day.type && !isLocked(d.iso)).map((d) => d.iso);
+
+    return h('div', null,
+      h('h3', null, `${fmtDate(day.iso)} ${day.dayName} — gün deseni`),
+      h('p', { class: 'modal-text' },
+        'Günün kaç doktorla ve hangi düzende geçeceğini siz seçersiniz; araç yalnızca ',
+        'saatleri ve kimin nöbet tutacağını belirler. Böylece esneklik öngörülebilir kalır.'),
+
+      h('div', { class: 'mt-16' }, (ws.patterns || []).map((p) => {
+        const aktif = p.id === gecerli;
+        return h('div', {
+          class: `cand${aktif ? ' current' : ''}`,
+          style: { gridTemplateColumns: '1fr auto' },
+          onClick: () => !aktif && uygula(p.id, [day.iso]),
+        },
+          h('div', null,
+            h('div', { class: 'cand-name' }, p.name,
+              aktif && h('span', { class: 'chip chip-info', style: { marginLeft: '6px' } }, 'bu günde kullanılıyor')),
+            p.note && h('div', { class: 'small muted' }, p.note),
+            h('div', { class: 'small mt-8' }, p.preview.map((v) =>
+              h('div', { class: 'mono', style: { fontSize: '11.5px' } },
+                `${v.label.padEnd(16, ' ')} ${v.timeLabel}  ·  ${fmtHours(v.presenceHours)} sa hastanede  ·  ${fmtHours(v.effectiveHours)} sa fiilî`)))),
+          h('div', { class: 'nowrap' },
+            h('span', { class: 'chip' }, `${p.doctorsPerDay} doktor`),
+            !aktif && h('button', {
+              class: 'btn btn-sm mt-8',
+              onClick: (e) => { e.stopPropagation(); uygula(p.id, ayniTip); },
+              title: `Ayın tüm ${day.type === 'weekend' ? 'hafta sonu' : 'hafta içi'} günlerine uygula`,
+            }, 'Tümüne uygula')));
+      })),
+
+      secili && h('div', { class: 'small muted mt-8' },
+        'Bu gün için özel bir desen seçilmiş. Varsayılana dönmek için aşağıdaki düğmeyi kullanın.'),
+
+      h('div', { class: 'modal-actions' },
+        secili && h('button', {
+          class: 'btn',
+          onClick: () => uygula(null, [day.iso]),
+        }, 'Varsayılana dön'),
+        h('button', { class: 'btn', onClick: close }, 'Kapat')));
+  }, { wide: true });
+}
+
 /* ------------------------------ Takvim ---------------------------- */
 
 function slotChip(slot) {
@@ -414,6 +483,7 @@ function calendar() {
   for (const day of ws.days) {
     const slots = ws.slots.filter((s) => s.date === day.iso);
     const frozen = isLocked(day.iso);
+    const desenler = ws.patterns || [];
     cells.push(h('div', {
       class: ['day', day.type === 'weekend' && 'we', day.isHoliday && 'holiday', frozen && 'frozen', day.iso === today && 'today']
         .filter(Boolean).join(' '),
@@ -422,6 +492,13 @@ function calendar() {
         h('span', { class: 'day-num' }, day.day),
         h('span', null, DAY_SHORT[day.weekday]),
         h('span', { class: 'flag' }, day.isHoliday && h('span', { class: 'chip chip-danger' }, 'tatil'), frozen && icon('lock'))),
+      // Gunun deseni: hangi duzenin kullanildigi her zaman gorunur, tiklanarak degistirilir.
+      desenler.length > 1 && day.patternName && h('button', {
+        class: 'day-pattern',
+        disabled: frozen || ws.month.status === 'final',
+        title: `Gün deseni: ${day.patternName}\nDeğiştirmek için tıkla`,
+        onClick: () => openPatternPicker(day),
+      }, day.patternName),
       slots.map(slotChip)));
   }
 

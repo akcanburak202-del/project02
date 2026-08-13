@@ -28,7 +28,7 @@ import {
 import { availableDates, computeActuals, computeTargets, computeWeights } from './fairness.js';
 import { MIN_PER_DAY } from './time.js';
 import { addDays, diffDays } from './calendar.js';
-import { clonePlan, createPlan } from './shiftplan.js';
+import { clonePlan } from './shiftplan.js';
 
 export const DEFAULT_WEIGHTS = {
   fairness: 1,
@@ -348,12 +348,12 @@ export function prepare({
 
 /** Plani tercih edilen saatlere dondurur (yeniden baslatmalar icin). */
 function resetPlan(ctx) {
-  const fresh = createPlan(ctx.plan.policy, ctx.days);
-  ctx.plan.handover.set(fresh.handover);
-  fresh.days.forEach((dp, i) => {
-    ctx.plan.days[i].arrivals.set(dp.arrivals);
-    ctx.plan.days[i].exits.set(dp.exits);
-  });
+  for (let d = 0; d < ctx.plan.handover.length; d += 1) {
+    ctx.plan.handover[d] = ctx.plan.policy.handover.preferred;
+  }
+  for (const dp of ctx.plan.days) {
+    dp.pattern.vars.forEach((v, i) => { dp.times[i] = v.preferred; });
+  }
 }
 
 /** Bos bir cozum durumu olusturur. */
@@ -850,10 +850,7 @@ export function solve(ctx, options = {}) {
   // En iyi plani geri yukle ki cikti ile maliyet tutarli olsun.
   if (bestPlan) {
     ctx.plan.handover.set(bestPlan.handover);
-    bestPlan.days.forEach((dp, i) => {
-      ctx.plan.days[i].arrivals.set(dp.arrivals);
-      ctx.plan.days[i].exits.set(dp.exits);
-    });
+    bestPlan.days.forEach((dp, i) => { ctx.plan.days[i].times.set(dp.times); });
     ctx.syncPlan();
   }
 

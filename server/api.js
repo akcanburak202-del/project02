@@ -20,6 +20,7 @@ import {
   monthLabel,
   parseMonthId,
   prevMonthId,
+  previewPattern,
   resolveSettings,
   updateLedger,
   validatePolicy,
@@ -143,6 +144,7 @@ export function createMonthRecord(db, id) {
     notes: '',
     ledgerDelta: null,
     plan: null,
+    dayPatterns: {},
   };
 }
 
@@ -256,6 +258,13 @@ export function monthWorkspace(db, id) {
     ledger,
     config: built.config,
     categories: CATEGORIES,
+    dayPatterns: month.dayPatterns || {},
+    patterns: built.config.shiftPolicy.mode === 'flexible'
+      ? built.config.shiftPolicy.enabledPatterns.map((x) => ({
+        id: x.id, name: x.name, note: x.note, doctorsPerDay: x.doctorsPerDay,
+        preview: previewPattern(x, built.config.shiftPolicy.handover.preferred),
+      }))
+      : [],
     warnings: [...built.warnings, ...(month.warnings || []), ...templateProblems],
   };
 }
@@ -760,6 +769,44 @@ route('POST', '/api/months/:id/pin', (ctx) => {
     if (pinned) set.add(slotId);
     else set.delete(slotId);
     month.pinned = [...set].sort();
+    return monthWorkspace(db, month.id);
+  });
+});
+
+route('POST', '/api/months/:id/day-pattern', (ctx) => {
+  requireAdmin(ctx);
+  const { dates, patternId } = ctx.body || {};
+  if (!Array.isArray(dates) || !dates.length) throw bad('En az bir gün seçilmeli.');
+  return update((db) => {
+    const month = getMonth(db, ctx.params.id);
+    assertEditable(month);
+    const policy = resolveSettings(getSettings(db), month.settings || {}).shiftPolicy;
+    if (policy.mode !== 'flexible') throw bad('Gün deseni yalnızca esnek modda seçilebilir.');
+    if (patternId && !policy.patternById.get(patternId)) throw bad('Bilinmeyen gün deseni.');
+    if (patternId && !policy.patternById.get(patternId).enabled) throw bad('Bu gün deseni kapalı.');
+
+    month.dayPatterns = { ...(month.dayPatterns || {}) };
+    for (const date of dates) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      assertNotLocked(month, date);
+      if (patternId) month.dayPatterns[date] = patternId;
+      else delete month.dayPatterns[date];
+    }
+    // Desen degisince o gunun slot yapisi ve atamalari gecersizlesir.
+    const built = buildMonthContext(db, month.id).built;
+    const valid = new Set(built.slots.map((s) => s.id));
+    const next = {};
+    for (const [slotId, doctorId] of Object.entries(month.assignments || {})) {
+      if (valid.has(slotId)) next[slotId] = doctorId;
+    }
+    month.assignments = next;
+    month.pinned = (month.pinned || []).filter((id) => valid.has(id));
+    month.plan = null;
+
+    logAction(db, {
+      userId: ctx.user.id, userName: ctx.user.name, action: 'gun-deseni',
+      detail: `${dates.length} gün -> ${patternId || 'varsayılan'}`,
+    });
     return monthWorkspace(db, month.id);
   });
 });

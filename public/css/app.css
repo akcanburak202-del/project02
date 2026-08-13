@@ -245,6 +245,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-fam
 .day.we .day-num { color: var(--warn); }
 .day-head .flag { margin-left: auto; display: inline-flex; gap: 3px; color: var(--muted-2); }
 
+.day-pattern {
+  font: inherit; font-size: 10px; font-weight: 600; letter-spacing: .01em;
+  border: 1px dashed var(--border-strong); background: transparent; color: var(--muted);
+  border-radius: 5px; padding: 1px 5px; cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.day-pattern:hover:not(:disabled) { border-color: var(--primary); color: var(--primary-dark); background: var(--primary-soft); }
+.day-pattern:disabled { cursor: default; opacity: .6; }
+
 .slot {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 6px; border-radius: 6px; cursor: pointer;
@@ -387,7 +396,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-fam
   .workspace { grid-template-columns: 1fr; }
   .card { border: 0; box-shadow: none; }
   .day { min-height: 74px; break-inside: avoid; border-color: #bbb; }
-  .slot { border-color: #ccc; }
+  .day-pattern {
+  font: inherit; font-size: 10px; font-weight: 600; letter-spacing: .01em;
+  border: 1px dashed var(--border-strong); background: transparent; color: var(--muted);
+  border-radius: 5px; padding: 1px 5px; cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.day-pattern:hover:not(:disabled) { border-color: var(--primary); color: var(--primary-dark); background: var(--primary-soft); }
+.day-pattern:disabled { cursor: default; opacity: .6; }
+
+.slot { border-color: #ccc; }
   .print-only { display: block !important; }
   table { font-size: 9.5px; }
   th { background: #eee !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }

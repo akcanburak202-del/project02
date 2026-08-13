@@ -5,6 +5,7 @@ etikette eşit dağıtan** çizelge aracı:
 
 | Etiket | Anlamı |
 |---|---|
+| Fiilî mesai (hafta içi / hafta sonu) | Bulunma saatinin, o an görevli doktor sayısına bölünmüş hâli — **birincil ölçüt** |
 | Hafta içi paylaşımsız | Hafta içi, hastanede tek başına geçen saatler |
 | Hafta içi paylaşımlı | Hafta içi, başka bir doktorla birlikte geçen saatler |
 | Hafta sonu paylaşımsız | Hafta sonu / resmî tatil, tek başına |
@@ -36,7 +37,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 57 test: motor, saat planı, kurallar, adalet ve uçtan uca API
+npm test                      # 62 test: motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -178,6 +179,85 @@ planı sıfırlanır ve yeniden üretim beklenir.
 
 ---
 
+## Fiilî mesai — asıl dengelenen büyüklük
+
+Hastanede geçirilen bir saatin iş yükü, **o an görevli doktor sayısına
+bölünür**. Tek başınayken 1 saat = 1 saat; iki kişiyken 1 saat = 0,5 saat.
+
+Bu ölçütün belirleyici özelliği şudur:
+
+> **Günlük toplam fiilî mesai, vardiya düzeni ne olursa olsun tam 24 saattir.**
+
+Çünkü her an serviste bir birimlik iş vardır ve kaç kişiyse aralarında
+bölüşürler:
+
+| Düzen | Hastanede bulunma | Fiilî mesai |
+|---|---|---|
+| Tek nöbetçi 24 sa | 24 sa | 24,0 |
+| Klasik ikili 09–24 / 15–09 | 33 sa | 10,5 + 13,5 = **24,0** |
+| İki kişi de 09–09 | 48 sa | 12,0 + 12,0 = **24,0** |
+| Üçlü kademeli | 37 sa | 8,3 + 5,8 + 9,8 = **24,0** |
+
+Havuz sabit olduğu için — bulunma saatinin aksine — fiilî mesai gerçekten
+eşitlenebilir. Bu yüzden **birincil adalet ölçütü budur**; hastanede bulunma
+saatleri ikincil olarak gözetilir ve ayrıca raporlanır.
+
+Ayın toplam havuzunun tam 24 × gün sayısı kalması için ayın ilk ve son devir
+saati sabit tutulur; aradaki günlerin devir saati serbestçe optimize edilir.
+
+**Ölçülen sonuç** (8 doktor, Ağustos 2026):
+
+| | Yayılım |
+|---|---|
+| Fiilî mesai | **0** (herkes 93,0 sa) |
+| Hastanede bulunma | 0,5 sa |
+| Nöbet sayısı | 7 / 8 (teorik minimum) |
+
+---
+
+## Gün desenleri — esnekliği öngörülebilir kılan yapı
+
+Çizelge ne kadar esnek olursa fiilî mesai o kadar iyi eşitlenir. Ama sınırsız
+esneklik, listeyi hazırlayanın sonucu öngörememesi demektir: "Bu gün kaç kişi
+olacak?" sorusunun cevabı her ay sürpriz olursa araç güvenilir olmaz.
+
+Çözüm: esneklik serbest değil, **adlandırılmış bir kümeden** seçilir.
+
+- Yönetici bir **gün deseni kütüphanesi** tanımlar (Ayarlar → Vardiya düzeni).
+- Her günün hangi deseni kullanacağını yönetici seçer; takvimde her gün,
+  kullandığı desenin adıyla etiketlenir.
+- Kütüphanede olmayan bir düzen asla ortaya çıkmaz.
+- Kütüphane tek desene indirilirse sonuç tamamen öngörülebilir olur.
+
+Yani **günün şekli insanın kararı** (kadro kararı), **saatler ve kimin nöbet
+tutacağı aracın işi** (matematik problemi).
+
+### Hazır desenler
+
+| Desen | Vardiyalar | Fiilî mesai |
+|---|---|---|
+| Klasik ikili | 09:00–24:00 + 15:00–09:00⁺ | 10,5 + 13,5 |
+| İki kişi tam gün | 09:00–09:00⁺ × 2 | 12 + 12 |
+| Tek nöbetçi 24 saat | 09:00–09:00⁺ | 24 |
+| Tam gün + gündüz desteği | 09:00–09:00⁺ ve 10:00–19:00 | 19,5 + 4,5 |
+| Üçlü kademeli | 09–20, 14–24, 20–09⁺ | 8 + 5 + 11 |
+
+Bir desen, günün devir saatinden ertesi günün devir saatine kadarki döngüyü
+kapsayan vardiya listesidir. Vardiya uçları `devir`, `devir+1` ya da esnek bir
+saat penceresi olabilir; araç pencereler içinde oynayarak dengeyi kurar.
+Kaydetmeden önce her desen, **en olumsuz saat kombinasyonuyla** kapsama
+boşluğuna karşı denetlenir.
+
+Bir güne tıklayıp desenini değiştirdiğinizde, seçenekler üreteceği fiilî mesai
+dağılımıyla birlikte gösterilir — seçmeden önce sonucu görürsünüz.
+"Tümüne uygula" ile ayın tüm hafta içi veya hafta sonu günlerine yayabilirsiniz.
+
+> Not: Uç desenler (örneğin tek nöbetçi 24 saat) eşitliği zorlaştırır — 24
+> saatlik tek parça iş yükü bölünemez. Karışık desenli bir ayda fiilî mesai
+> yayılımı 0 yerine 2–3 saate çıkabilir; fark yine devir defterine yazılır.
+
+---
+
 ## Nöbet sayıları ve kalan denge açıkları
 
 ### Nöbet sayısı
@@ -202,16 +282,16 @@ gibi sonuçlar yapısal olarak imkânsızdır.
 Yarım zamanlı ve ay ortasında katılan/ayrılan doktorlarda da aynı kural
 işler: pay orantılı hesaplanır, sınır o payın tabanı/tavanı olur.
 
-### Toplam saat
+### Saatler
 
 Nöbet sayısı eşitlenemese bile **saatler eşitlenebilir** — çünkü giriş/çıkış
-saatleri esnektir. 7 nöbet tutan doktora biraz uzun, 8 nöbet tutana biraz
-kısa vardiyalar denk getirilerek toplam saat hedefe oturtulur.
+saatleri esnektir. 7 nöbet tutan doktora biraz uzun, 8 nöbet tutana biraz kısa
+vardiyalar denk getirilir.
 
-8 doktorlu Ağustos 2026'da sonuç: herkes **122,5–123 saat** (hedef 122,9).
-Yayılım 0,5 saat.
+8 doktorlu Ağustos 2026'da fiilî mesai **herkeste 93,0 saat** (sapma sıfır),
+hastanede bulunma 121,5–122 saat.
 
-### Neden tam sıfır değil
+### Bulunma saatinde neden tam sıfır değil
 
 Üç yapısal sınır kalıyor:
 
@@ -412,6 +492,7 @@ engine/          Çizelge motoru (arayüzden ve sunucudan bağımsız, saf hesap
   calendar.js    Ay günleri, hafta sonu ve tatil tespiti
   slots.js       Nöbet üretimi + dört etiketli saat hesabı (sweep-line)
   shiftplan.js   Giriş/çıkış saatlerinin karar modeli (esnek vardiya düzeni)
+  patterns.js    Gün desenleri — esnekliği öngörülebilir kılan kütüphane
   fairness.js    Ağırlıklar, hedefler, devir defteri
   scheduler.js   Sert kurallar, maliyet fonksiyonu, çözücü
   policy.js      Tercih girişi yetki kuralları (izin yalnızca yöneticide)
@@ -421,5 +502,5 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            57 test — motor, saat planı, kurallar, adalet ve uçtan uca API
+test/            62 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```

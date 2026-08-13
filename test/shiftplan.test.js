@@ -6,16 +6,17 @@ import {
   DEFAULT_SHIFT_POLICY, createPlan, isDayValid, normalizePolicy, planDeviationHours,
   readVariable, timeVariables, validatePolicy, writeVariable,
 } from '../engine/shiftplan.js';
+import { DEFAULT_PATTERNS, normalizePatterns, previewPattern, validatePattern } from '../engine/patterns.js';
 import { monthDays } from '../engine/calendar.js';
 import { makeRng } from '../engine/scheduler.js';
 import { generateSchedule, DEFAULT_SHIFT_TEMPLATES } from '../engine/index.js';
-import { CATEGORY_KEYS } from '../engine/slots.js';
+import { CATEGORY_KEYS, EFFECTIVE_KEYS as EFF_KEYS } from '../engine/slots.js';
 
 const CAL = { weekendDays: [0, 6], holidays: [] };
 
 function setup(policy = DEFAULT_SHIFT_POLICY) {
   const days = monthDays(2026, 8, CAL);
-  const plan = createPlan(policy, days);
+  const plan = createPlan(normalizePolicy(policy), days);
   const built = buildSlotsFromPlan({ year: 2026, month: 8, days, plan, ...CAL });
   return { days, plan, built };
 }
@@ -148,7 +149,8 @@ test('ay toplamlari her zaman slotlarin gercek toplamina esit kalir', () => {
 
 test('saat etiketi plan degisince guncellenir', () => {
   const { days, plan, built } = setup();
-  const v = timeVariables(plan, days).find((x) => x.kind === 'exit' && x.day === 3);
+  // 4 Agustos (indeks 3) gunduz vardiyasinin cikis saati
+  const v = timeVariables(plan, days).find((x) => x.kind === 'time' && x.day === 3);
   writeVariable(plan, v, 22 * 60);
   refreshPlanWindow(built, { year: 2026, month: 8, ...CAL }, 2, 3);
   const gunduz = built.slots.find((s) => s.id === '2026-08-04#v1');
@@ -239,17 +241,74 @@ test('esneklik kapatilirsa saatler tercih edilen degerde sabit kalir', () => {
   }
 });
 
-test('gecersiz saat politikasi hata verir', () => {
+test('kapsama boslugu birakan gun deseni hata verir', () => {
   const problems = validatePolicy({
-    weekday: {
-      doctorsPerDay: 2,
-      handover: { min: '08:00', max: '10:00', preferred: '09:00' },
-      arrivals: [{ min: '14:00', max: '17:00', preferred: '15:00' }],
-      // cikis, gelisten once olabiliyor -> serviste doktor kalmaz
-      exits: [{ min: '12:00', max: '13:00', preferred: '13:00' }],
-    },
+    patterns: [{
+      id: 'bozuk',
+      name: 'Bozuk desen',
+      enabled: true,
+      shifts: [
+        // Gunduz erken cikip gece gec geliyor -> arada serviste kimse kalmaz
+        { label: 'Gündüz', start: 'devir', end: { min: '13:00', preferred: '14:00', max: '15:00' } },
+        { label: 'Gece', start: { min: '16:00', preferred: '17:00', max: '18:00' }, end: 'devir+1' },
+      ],
+    }],
   });
-  assert.ok(problems.some((p) => p.level === 'error'));
+  assert.ok(problems.some((p) => p.level === 'error'), JSON.stringify(problems));
+});
+
+test('desen kutuphanesindeki her desen tam 24 saat fiili mesai verir', () => {
+  // Bu, desenin gunu bosluksuz ve cakismasiz kapsadiginin de kanitidir.
+  for (const pattern of normalizePatterns(DEFAULT_PATTERNS)) {
+    const preview = previewPattern(pattern);
+    const toplam = preview.reduce((a, s) => a + s.effectiveHours, 0);
+    assert.ok(Math.abs(toplam - 24) < 0.01, `${pattern.name}: fiilî toplam ${toplam}`);
+    assert.deepEqual(
+      validatePattern(pattern).filter((p) => p.level === 'error'),
+      [],
+      `${pattern.name} gecersiz`,
+    );
+  }
+});
+
+test('gun basina farkli desen secilebilir ve slot yapisi ona gore olusur', () => {
+  const doctors = {};
+  const ids = [];
+  for (let i = 1; i <= 8; i += 1) {
+    const id = `d${String(i).padStart(2, '0')}`;
+    doctors[id] = { id, name: id };
+    ids.push(id);
+  }
+  const dayPatterns = {
+    '2026-08-01': 'tekli-24',   // tek nobetci 24 saat
+    '2026-08-05': 'ikili-tam',  // iki kisi de tam gun
+  };
+  const out = generateSchedule({
+    month: {
+      id: '2026-08',
+      participants: ids.map((doctorId) => ({ doctorId, active: true })),
+      preferences: {}, assignments: {}, pinned: [], lockedThrough: null,
+      settings: {}, dayPatterns,
+    },
+    doctors,
+    settings: { shiftPolicy: { patterns: DEFAULT_PATTERNS.map((p) => ({ ...p, enabled: true })) } },
+  });
+
+  const gun1 = out.slots.filter((s) => s.date === '2026-08-01');
+  const gun5 = out.slots.filter((s) => s.date === '2026-08-05');
+  assert.equal(gun1.length, 1, 'tek nobetci deseni bir slot uretmeli');
+  assert.equal(gun5.length, 2, 'tam gun deseni iki slot uretmeli');
+
+  // Tek nobetci: butun gun tek basina, yani fiili mesai = bulunma suresi
+  assert.ok(Math.abs(gun1[0].effectiveHours - gun1[0].hours) < 1e-9);
+  assert.ok(gun1[0].hours >= 22, `tek nobetci gunu ${gun1[0].hours} sa`);
+
+  // Iki kisi tam gun: ayni araliklar, fiili mesai tam ortadan bolunur
+  assert.equal(gun5[0].hours, gun5[1].hours);
+  for (const s of gun5) assert.ok(Math.abs(s.effectiveHours - s.hours / 2) < 1e-9, `${s.effectiveHours}`);
+
+  assert.equal(out.report.unassigned.length, 0);
+  assert.deepEqual(out.warnings.filter((w) => w.level !== 'info'), []);
 });
 
 test('plan sapmasi tercih edilen saatlerde sifirdir', () => {
@@ -260,43 +319,45 @@ test('plan sapmasi tercih edilen saatlerde sifirdir', () => {
   assert.equal(planDeviationHours(plan, vars), 1);
 });
 
-test('uc doktorlu gun duzeni de kesintisiz kapsar', () => {
+test('uc vardiyali gun deseni de kesintisiz kapsar', () => {
   const policy = {
-    weekday: {
-      doctorsPerDay: 3,
-      handover: { min: '08:00', max: '09:00', preferred: '08:00' },
-      arrivals: [
-        { min: '13:00', max: '15:00', preferred: '14:00' },
-        { min: '19:00', max: '21:00', preferred: '20:00' },
-      ],
-      exits: [
-        { min: '19:00', max: '21:00', preferred: '20:00' },
-        { min: '23:00', max: '24:00', preferred: '24:00' },
-      ],
-    },
-    weekend: {
-      doctorsPerDay: 3,
-      handover: { min: '08:00', max: '09:00', preferred: '08:00' },
-      arrivals: [
-        { min: '13:00', max: '15:00', preferred: '14:00' },
-        { min: '19:00', max: '21:00', preferred: '20:00' },
-      ],
-      exits: [
-        { min: '19:00', max: '21:00', preferred: '20:00' },
-        { min: '23:00', max: '24:00', preferred: '24:00' },
-      ],
-    },
     minShiftHours: 8,
+    patterns: DEFAULT_PATTERNS.map((p) => ({ ...p, enabled: p.id === 'uclu' })),
+    defaultPattern: { weekday: 'uclu', weekend: 'uclu' },
   };
   const days = monthDays(2026, 8, CAL);
-  const plan = createPlan(policy, days);
+  const plan = createPlan(normalizePolicy(policy), days);
   const built = buildSlotsFromPlan({ year: 2026, month: 8, days, plan, ...CAL });
   assert.equal(built.warnings.length, 0, JSON.stringify(built.warnings));
   assert.equal(built.slots.length, 31 * 3);
-  // Gunluk toplam doktor-saat = 24 + kesisimler
+  // Gunluk fiili mesai toplami her zaman 24 saat
   const gun = built.slots.filter((s) => s.date === '2026-08-04');
-  assert.equal(vectorTotal(gun.reduce((acc, s) => {
-    for (const k of CATEGORY_KEYS) acc[k] += s.cat[k];
-    return acc;
-  }, { wdSolo: 0, wdShared: 0, weSolo: 0, weShared: 0 })), gun.reduce((a, s) => a + s.hours, 0));
+  const fiiliToplam = gun.reduce((a, s) => a + s.effectiveHours, 0);
+  assert.ok(Math.abs(fiiliToplam - 24) < 1e-9, `${fiiliToplam}`);
+});
+
+test('normalizePatterns ve normalizePolicy tekrar cagrilinca bozulmaz', () => {
+  // Politika hem ayarlar kaydedilirken hem her ay kurulurken normalize edilir.
+  // Islem idempotent degilse 'devir' isaretcileri sabit saate donusur, gunun
+  // sonu kapanmaz ve sahte "kapsama boslugu" hatalari uretilir.
+  const bir = normalizePatterns(DEFAULT_PATTERNS);
+  const iki = normalizePatterns(bir);
+  const uc = normalizePatterns(iki);
+  for (const list of [iki, uc]) {
+    list.forEach((p, i) => {
+      p.shifts.forEach((sh, j) => {
+        assert.equal(sh.start.kind, bir[i].shifts[j].start.kind, `${p.name} / ${sh.label} başlangıç`);
+        assert.equal(sh.end.kind, bir[i].shifts[j].end.kind, `${p.name} / ${sh.label} bitiş`);
+      });
+      assert.equal(p.vars.length, bir[i].vars.length);
+    });
+  }
+
+  const p1 = normalizePolicy({});
+  const p2 = normalizePolicy(p1);
+  assert.deepEqual(
+    validatePolicy(p2).filter((x) => x.level === 'error'),
+    [],
+    'ikinci normalize sonrasi sahte hata',
+  );
 });

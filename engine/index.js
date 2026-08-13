@@ -8,8 +8,9 @@ import {
   CATEGORIES, CATEGORY_KEYS, emptyCategoryVector, vectorTotal,
 } from './slots.js';
 import {
-  DEFAULT_SHIFT_POLICY, createPlan, isDayValid, normalizePolicy, validatePolicy,
+  DEFAULT_SHIFT_POLICY, createPlan, isDayValid, normalizePolicy, patternForDay, validatePolicy,
 } from './shiftplan.js';
+import { DEFAULT_PATTERNS, normalizePatterns, previewPattern } from './patterns.js';
 import { buildBalanceReport, computeActuals, computeTargets, computeWeights, updateLedger } from './fairness.js';
 import {
   DEFAULT_OPTIMIZER,
@@ -26,7 +27,11 @@ export {
   CATEGORIES,
   CATEGORY_KEYS,
   DEFAULT_SHIFT_POLICY,
+  DEFAULT_PATTERNS,
+  normalizePatterns,
   normalizePolicy,
+  patternForDay,
+  previewPattern,
   validatePolicy,
   DEFAULT_OPTIMIZER,
   DEFAULT_RULES,
@@ -96,7 +101,7 @@ export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, 
   let built;
   if (cfg.shiftPolicy.mode === 'flexible') {
     const days = monthDays(year, mm, { weekendDays: cfg.weekendDays, holidays: cfg.holidays });
-    const plan = month.plan ? adoptPlan(month.plan, cfg.shiftPolicy, days) : createPlan(cfg.shiftPolicy, days);
+    const plan = adoptPlan(month.plan, cfg.shiftPolicy, days, month.dayPatterns || {});
     built = buildSlotsFromPlan({
       year, month: mm, days, plan,
       weekendDays: cfg.weekendDays, holidays: cfg.holidays,
@@ -129,9 +134,14 @@ export function buildContext({ month, doctors = {}, settings = {}, ledger = {}, 
   return { ...built, ctx, config: cfg, year, month: mm };
 }
 
-/** Kaydedilmis saat planini mevcut ayarlarla birlestirir (sinirlara kirpar). */
-function adoptPlan(saved, policy, days) {
-  const plan = createPlan(policy, days);
+/**
+ * Kaydedilmis saat planini mevcut ayarlarla birlestirir.
+ * Gun desenleri ay kaydindan gelir; saatler sinirlarin disindaysa
+ * tercih edilen degerlere donulur.
+ */
+function adoptPlan(saved, policy, days, dayPatterns) {
+  const plan = createPlan(policy, days, dayPatterns);
+  if (!saved) return plan;
   try {
     if (Array.isArray(saved.handover)) {
       for (let d = 0; d < plan.handover.length && d < saved.handover.length; d += 1) {
@@ -140,14 +150,15 @@ function adoptPlan(saved, policy, days) {
     }
     (saved.days || []).forEach((dp, i) => {
       if (!plan.days[i]) return;
-      (dp.arrivals || []).forEach((v, j) => { if (j < plan.days[i].arrivals.length) plan.days[i].arrivals[j] = v; });
-      (dp.exits || []).forEach((v, j) => { if (j < plan.days[i].exits.length) plan.days[i].exits[j] = v; });
+      // Kaydedilmis saatler yalnizca desen ayni kaldiysa gecerlidir
+      if (dp.patternId && dp.patternId !== plan.days[i].patternId) return;
+      (dp.times || []).forEach((v, j) => { if (j < plan.days[i].times.length) plan.days[i].times[j] = v; });
     });
     for (let d = 0; d < days.length; d += 1) {
-      if (!isDayValid(plan, days, d)) return createPlan(policy, days);
+      if (!isDayValid(plan, days, d)) return createPlan(policy, days, dayPatterns);
     }
   } catch {
-    return createPlan(policy, days);
+    return createPlan(policy, days, dayPatterns);
   }
   return plan;
 }
@@ -157,7 +168,7 @@ export function serializePlan(plan) {
   if (!plan) return null;
   return {
     handover: Array.from(plan.handover),
-    days: plan.days.map((d) => ({ arrivals: Array.from(d.arrivals), exits: Array.from(d.exits) })),
+    days: plan.days.map((d) => ({ patternId: d.patternId, times: Array.from(d.times) })),
   };
 }
 

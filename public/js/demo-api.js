@@ -15,7 +15,7 @@
 import {
   DEFAULT_OPTIMIZER, DEFAULT_RULES, DEFAULT_SHIFT_POLICY, DEFAULT_SHIFT_TEMPLATES, DEFAULT_WEIGHTS,
   analyzeAssignments, buildContext, extractCarryOver, generateSchedule,
-  monthLabel, parseMonthId, prevMonthId, resolveSettings, validatePolicy, validateTemplates,
+  monthLabel, parseMonthId, prevMonthId, previewPattern, resolveSettings, validatePolicy, validateTemplates,
 } from '../../engine/index.js';
 import { CATEGORIES, CATEGORY_KEYS, emptyCategoryVector } from '../../engine/slots.js';
 import { candidatesForSlot, checkSwap } from '../../engine/scheduler.js';
@@ -130,7 +130,7 @@ function createMonthRecord(d, id) {
     })),
     preferences: {}, assignments: {}, pinned: [], lockedThrough: null,
     prefWindowOpen: true, prefDeadline: null, settings: {}, seed: null,
-    generatedAt: null, warnings: [], notes: '', ledgerDelta: null, plan: null,
+    generatedAt: null, warnings: [], notes: '', ledgerDelta: null, plan: null, dayPatterns: {},
   };
 }
 
@@ -239,6 +239,13 @@ function monthWorkspace(d, id) {
     report, ledger,
     config: built.config,
     categories: CATEGORIES,
+    dayPatterns: month.dayPatterns || {},
+    patterns: built.config.shiftPolicy.mode === 'flexible'
+      ? built.config.shiftPolicy.enabledPatterns.map((x) => ({
+        id: x.id, name: x.name, note: x.note, doctorsPerDay: x.doctorsPerDay,
+        preview: previewPattern(x, built.config.shiftPolicy.handover.preferred),
+      }))
+      : [],
     warnings: [...built.warnings, ...(month.warnings || []), ...templateProblems],
   };
 }
@@ -586,6 +593,36 @@ route('POST', '/api/months/:id/pin', ({ body, params }) => {
   if (body.pinned) set.add(body.slotId);
   else set.delete(body.slotId);
   month.pinned = [...set].sort();
+  save();
+  return monthWorkspace(d, month.id);
+});
+
+route('POST', '/api/months/:id/day-pattern', ({ body, params }) => {
+  requireAdmin();
+  const d = load();
+  const month = getMonth(d, params.id);
+  assertEditable(month);
+  const policy = resolveSettings(getSettings(d), month.settings || {}).shiftPolicy;
+  if (policy.mode !== 'flexible') throw bad('Gün deseni yalnızca esnek modda seçilebilir.');
+  const { dates, patternId } = body || {};
+  if (!Array.isArray(dates) || !dates.length) throw bad('En az bir gün seçilmeli.');
+  if (patternId && !policy.patternById.get(patternId)?.enabled) throw bad('Bilinmeyen veya kapalı gün deseni.');
+
+  month.dayPatterns = { ...(month.dayPatterns || {}) };
+  for (const date of dates) {
+    assertNotLocked(month, date);
+    if (patternId) month.dayPatterns[date] = patternId;
+    else delete month.dayPatterns[date];
+  }
+  const built = buildMonthContext(d, month.id).built;
+  const valid = new Set(built.slots.map((s) => s.id));
+  const next = {};
+  for (const [slotId, doctorId] of Object.entries(month.assignments || {})) {
+    if (valid.has(slotId)) next[slotId] = doctorId;
+  }
+  month.assignments = next;
+  month.pinned = (month.pinned || []).filter((id) => valid.has(id));
+  month.plan = null;
   save();
   return monthWorkspace(d, month.id);
 });

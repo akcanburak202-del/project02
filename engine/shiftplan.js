@@ -36,28 +36,21 @@
  */
 
 import { MIN_PER_DAY, formatRange, parseTime } from './time.js';
+import { DEFAULT_PATTERNS, normalizePatterns, patternIntervals, validatePattern } from './patterns.js';
 
 export const DEFAULT_SHIFT_POLICY = {
   mode: 'flexible',
   stepMinutes: 30,
-  /** Tercih edilen saatten sapmanin bedeli: kapali / olculu / serbest */
+  /** Tercih edilen saatten sapmanin bedeli: kapali / az / olculu / serbest */
   flexibility: 'moderate',
   minShiftHours: 8,
   maxShiftHours: 24,
-  weekday: {
-    doctorsPerDay: 2,
-    labels: ['Gündüz', 'Akşam/Gece'],
-    handover: { min: '08:00', max: '10:00', preferred: '09:00' },
-    arrivals: [{ min: '14:00', max: '17:00', preferred: '15:00' }],
-    exits: [{ min: '22:00', max: '24:00', preferred: '24:00' }],
-  },
-  weekend: {
-    doctorsPerDay: 2,
-    labels: ['Gündüz', 'Akşam/Gece'],
-    handover: { min: '08:00', max: '10:00', preferred: '09:00' },
-    arrivals: [{ min: '14:00', max: '17:00', preferred: '15:00' }],
-    exits: [{ min: '22:00', max: '24:00', preferred: '24:00' }],
-  },
+  /** Sabah devri — gunun dongusunun basladigi an */
+  handover: { min: '08:00', max: '10:00', preferred: '09:00' },
+  /** Kullanilabilir gun desenleri (bkz. patterns.js) */
+  patterns: DEFAULT_PATTERNS,
+  /** Gun tipine gore varsayilan desen */
+  defaultPattern: { weekday: 'ikili-klasik', weekend: 'ikili-klasik' },
 };
 
 export const FLEXIBILITY_WEIGHTS = {
@@ -80,115 +73,89 @@ function win(w, fallbackPreferred) {
 
 /** Ayarlari sayisal, dogrulanmis bicime cevirir. */
 export function normalizePolicy(policy = {}) {
+  // Zaten normalize edilmis politika tekrar isleme sokulmaz.
+  if (policy && policy.patternById instanceof Map) return policy;
   const p = { ...DEFAULT_SHIFT_POLICY, ...policy };
-  const step = Math.max(5, Math.round(Number(p.stepMinutes) || 30));
+  const patterns = normalizePatterns(p.patterns);
+  const byId = new Map(patterns.map((x) => [x.id, x]));
+  const enabled = patterns.filter((x) => x.enabled);
+  const fallback = enabled[0] || patterns[0];
 
-  const side = (key) => {
-    const raw = { ...DEFAULT_SHIFT_POLICY[key], ...(policy?.[key] || {}) };
-    const k = Math.max(1, Math.round(Number(raw.doctorsPerDay) || 2));
-    const arrivals = [];
-    const exits = [];
-    for (let i = 0; i < k - 1; i += 1) {
-      arrivals.push(win(raw.arrivals?.[i], raw.arrivals?.[0]?.preferred ?? '15:00'));
-      exits.push(win(raw.exits?.[i], raw.exits?.[0]?.preferred ?? '24:00'));
-    }
-    const labels = [];
-    for (let i = 0; i < k; i += 1) {
-      labels.push(raw.labels?.[i] || (i === 0 ? 'Gündüz' : i === k - 1 ? 'Akşam/Gece' : `Vardiya ${i + 1}`));
-    }
-    return { doctorsPerDay: k, labels, handover: win(raw.handover, '09:00'), arrivals, exits };
+  const pick = (key) => {
+    const wanted = p.defaultPattern?.[key];
+    const found = wanted && byId.get(wanted);
+    return found && found.enabled ? found.id : fallback?.id;
   };
 
   return {
     mode: p.mode === 'fixed' ? 'fixed' : 'flexible',
-    stepMinutes: step,
+    stepMinutes: Math.max(5, Math.round(Number(p.stepMinutes) || 30)),
     flexibility: FLEXIBILITY_WEIGHTS[p.flexibility] !== undefined ? p.flexibility : 'moderate',
     minShiftHours: Number(p.minShiftHours) > 0 ? Number(p.minShiftHours) : 8,
     maxShiftHours: Number(p.maxShiftHours) > 0 ? Number(p.maxShiftHours) : 24,
-    weekday: side('weekday'),
-    weekend: side('weekend'),
+    handover: win(p.handover, '09:00'),
+    patterns,
+    patternById: byId,
+    enabledPatterns: enabled,
+    defaultPattern: { weekday: pick('weekday'), weekend: pick('weekend') },
   };
+}
+
+/** Bir gunun kullanacagi desen: ay kaydindaki secim, yoksa varsayilan. */
+export function patternForDay(policy, day, dayPatterns = {}) {
+  const wanted = dayPatterns?.[day.iso];
+  const found = wanted && policy.patternById.get(wanted);
+  if (found) return found;
+  const fallbackId = policy.defaultPattern[day.type === 'weekend' ? 'weekend' : 'weekday'];
+  return policy.patternById.get(fallbackId) || policy.patterns[0];
 }
 
 /** Ayarlarin mantikli olup olmadigini denetler. */
 export function validatePolicy(policy) {
   const P = normalizePolicy(policy);
   const problems = [];
-  const label = { weekday: 'Hafta içi', weekend: 'Hafta sonu' };
 
-  for (const key of ['weekday', 'weekend']) {
-    const s = P[key];
-    const name = label[key];
-
-    if (s.handover.min < parseTime('05:00') || s.handover.max > parseTime('12:00')) {
-      problems.push({
-        level: 'warn',
-        message: `${name}: sabah devri ${formatRange(s.handover.min, s.handover.max)} — alışılmadık bir aralık.`,
-      });
-    }
-    for (let i = 0; i < s.arrivals.length; i += 1) {
-      const a = s.arrivals[i];
-      const e = s.exits[i];
-      if (a.min < parseTime('06:00') || a.max > parseTime('22:00')) {
-        problems.push({
-          level: 'warn',
-          message: `${name}: ${i + 2}. vardiyanın geliş aralığı ${formatRange(a.min, a.max)} — gece yarısına yakın girişler mantıklı değildir.`,
-        });
-      }
-      if (e.min < a.min) {
-        problems.push({
-          level: 'error',
-          message: `${name}: ${i + 1}. vardiyanın çıkışı, ${i + 2}. vardiyanın gelişinden önce olabiliyor — bu saatlerde serviste doktor kalmaz.`,
-        });
-      }
-      if (i > 0 && a.min < s.arrivals[i - 1].min) {
-        problems.push({
-          level: 'error',
-          message: `${name}: vardiyaların geliş saatleri sıralı olmalı.`,
-        });
-      }
-    }
-
-    // En kisa/uzun vardiya suresi, en olumsuz kombinasyonla denetlenir.
-    const k = s.doctorsPerDay;
-    if (k >= 2) {
-      const firstMin = (s.exits[0].min - s.handover.max) / 60;
-      const firstMax = (s.exits[0].max - s.handover.min) / 60;
-      const lastMin = (MIN_PER_DAY + s.handover.min - s.arrivals[k - 2].max) / 60;
-      const lastMax = (MIN_PER_DAY + s.handover.max - s.arrivals[k - 2].min) / 60;
-      for (const [len, what] of [[firstMin, 'en kısa'], [firstMax, 'en uzun']]) {
-        if (len < P.minShiftHours) problems.push({ level: 'warn', message: `${name}: 1. vardiya ${what} hâlinde ${len} saat — alt sınır ${P.minShiftHours} saat.` });
-        if (len > P.maxShiftHours) problems.push({ level: 'warn', message: `${name}: 1. vardiya ${what} hâlinde ${len} saat — üst sınır ${P.maxShiftHours} saat.` });
-      }
-      for (const [len, what] of [[lastMin, 'en kısa'], [lastMax, 'en uzun']]) {
-        if (len < P.minShiftHours) problems.push({ level: 'warn', message: `${name}: son vardiya ${what} hâlinde ${len} saat — alt sınır ${P.minShiftHours} saat.` });
-        if (len > P.maxShiftHours) problems.push({ level: 'warn', message: `${name}: son vardiya ${what} hâlinde ${len} saat — üst sınır ${P.maxShiftHours} saat.` });
-      }
-    }
+  if (P.handover.min < parseTime('05:00') || P.handover.max > parseTime('12:00')) {
+    problems.push({
+      level: 'warn',
+      message: `Sabah devri ${formatRange(P.handover.min, P.handover.max)} — alışılmadık bir aralık.`,
+    });
+  }
+  if (!P.enabledPatterns.length) {
+    problems.push({ level: 'error', message: 'En az bir gün deseni açık olmalı.' });
+  }
+  for (const pattern of P.enabledPatterns) {
+    problems.push(...validatePattern(pattern, {
+      handover: P.handover.preferred,
+      minShiftHours: P.minShiftHours,
+      maxShiftHours: P.maxShiftHours,
+    }));
   }
   return problems;
 }
 
 const round = (value, step) => Math.round(value / step) * step;
 
-/** Tercih edilen saatlerden olusan baslangic planini uretir. */
-export function createPlan(policy, days) {
-  const P = normalizePolicy(policy);
+/**
+ * Baslangic plani: her gun icin desen secimi (ay kaydindan ya da varsayilan)
+ * ve tercih edilen saatler.
+ */
+export function createPlan(policy, days, dayPatterns = {}) {
+  const P = policy.patternById ? policy : normalizePolicy(policy);
   const n = days.length;
-  const sideOf = (i) => (days[Math.min(Math.max(i, 0), n - 1)].type === 'weekend' ? P.weekend : P.weekday);
 
   const handover = new Int32Array(n + 1);
-  for (let d = 0; d <= n; d += 1) handover[d] = sideOf(d).handover.preferred;
+  for (let d = 0; d <= n; d += 1) handover[d] = P.handover.preferred;
 
-  const dayPlans = [];
-  for (let d = 0; d < n; d += 1) {
-    const s = sideOf(d);
-    dayPlans.push({
-      k: s.doctorsPerDay,
-      arrivals: Int32Array.from(s.arrivals.map((a) => a.preferred)),
-      exits: Int32Array.from(s.exits.map((e) => e.preferred)),
-    });
-  }
+  const dayPlans = days.map((day) => {
+    const pattern = patternForDay(P, day, dayPatterns);
+    return {
+      patternId: pattern.id,
+      pattern,
+      k: pattern.shifts.length,
+      times: Int32Array.from(pattern.vars.map((v) => v.preferred)),
+    };
+  });
   return { handover, days: dayPlans, policy: P };
 }
 
@@ -196,48 +163,34 @@ export function clonePlan(plan) {
   return {
     handover: Int32Array.from(plan.handover),
     days: plan.days.map((d) => ({
+      patternId: d.patternId,
+      pattern: d.pattern,
       k: d.k,
-      arrivals: Int32Array.from(d.arrivals),
-      exits: Int32Array.from(d.exits),
+      times: Int32Array.from(d.times),
     })),
     policy: plan.policy,
   };
 }
 
-/** Bir gunun degiskenlerinin gecerli olup olmadigi. */
+/** Bir gunun degiskenleri gecerli mi (pencere sinirlari + vardiya sureleri). */
 export function isDayValid(plan, days, d) {
   const P = plan.policy;
   const n = days.length;
   if (d < 0 || d >= n) return true;
-  const side = days[d].type === 'weekend' ? P.weekend : P.weekday;
   const dp = plan.days[d];
-  const k = dp.k;
   const h = plan.handover[d];
-  const hNext = plan.handover[d + 1];
+  if (h < P.handover.min || h > P.handover.max) return false;
 
-  if (h < side.handover.min || h > side.handover.max) return false;
-
-  let prevStart = h;
-  let prevEnd = null;
-  for (let i = 0; i < k - 1; i += 1) {
-    const a = dp.arrivals[i];
-    const e = dp.exits[i];
-    if (a < side.arrivals[i].min || a > side.arrivals[i].max) return false;
-    if (e < side.exits[i].min || e > side.exits[i].max) return false;
-    if (a < prevStart) return false;          // gelisler sirali
-    if (e < a) return false;                  // cikis, sonraki gelisten once olamaz (bosluk olur)
-    if (prevEnd !== null && e < prevEnd) return false; // cikislar sirali
-    prevStart = a;
-    prevEnd = e;
+  for (let i = 0; i < dp.pattern.vars.length; i += 1) {
+    const v = dp.pattern.vars[i];
+    if (dp.times[i] < v.min || dp.times[i] > v.max) return false;
   }
 
-  // Vardiya sureleri
+  const intervals = patternIntervals(dp.pattern, h, plan.handover[d + 1], dp.times);
   const minLen = P.minShiftHours * 60;
   const maxLen = P.maxShiftHours * 60;
-  for (let i = 0; i < k; i += 1) {
-    const start = i === 0 ? h : dp.arrivals[i - 1];
-    const end = i === k - 1 ? MIN_PER_DAY + hNext : dp.exits[i];
-    const len = end - start;
+  for (const it of intervals) {
+    const len = it.end - it.start;
     if (len < minLen || len > maxLen) return false;
   }
   return true;
@@ -249,42 +202,38 @@ export function affectedDays(kind, dayIndex, total) {
   return [dayIndex];
 }
 
-/**
- * Optimize edilebilir saat degiskenlerinin listesi.
- * Her degisken: { kind, day, index, min, max, preferred }
- */
+/** Optimize edilebilir saat degiskenleri. */
 export function timeVariables(plan, days) {
   const P = plan.policy;
   const out = [];
   const n = days.length;
-  const sideOf = (i) => (days[Math.min(Math.max(i, 0), n - 1)].type === 'weekend' ? P.weekend : P.weekday);
 
-  for (let d = 0; d <= n; d += 1) {
-    const s = sideOf(d);
-    if (s.handover.min !== s.handover.max) {
-      out.push({ kind: 'handover', day: d, index: 0, ...s.handover });
+  // Ayin ILK ve SON devir saati sabit tutulur.
+  // Aksi halde ayin kapsadigi toplam sure 24 x gun sayisindan sapar
+  // (toplam = 24n + son devir - ilk devir) ve "fiili mesai havuzu sabittir"
+  // ozelligi bozulur. Bu ozellik hem adalet hesabinin hem de aciklanabilirligin
+  // temeli oldugu icin iki uc gun degisken birakilmaz.
+  for (let d = 1; d < n; d += 1) {
+    if (P.handover.min !== P.handover.max) {
+      out.push({ kind: 'handover', day: d, index: 0, ...P.handover });
     }
   }
   for (let d = 0; d < n; d += 1) {
-    const s = sideOf(d);
-    for (let i = 0; i < plan.days[d].k - 1; i += 1) {
-      if (s.arrivals[i].min !== s.arrivals[i].max) out.push({ kind: 'arrival', day: d, index: i, ...s.arrivals[i] });
-      if (s.exits[i].min !== s.exits[i].max) out.push({ kind: 'exit', day: d, index: i, ...s.exits[i] });
-    }
+    plan.days[d].pattern.vars.forEach((v, i) => {
+      if (v.min !== v.max) out.push({ kind: 'time', day: d, index: i, min: v.min, max: v.max, preferred: v.preferred });
+    });
   }
   return out;
 }
 
 export function readVariable(plan, v) {
   if (v.kind === 'handover') return plan.handover[v.day];
-  if (v.kind === 'arrival') return plan.days[v.day].arrivals[v.index];
-  return plan.days[v.day].exits[v.index];
+  return plan.days[v.day].times[v.index];
 }
 
 export function writeVariable(plan, v, value) {
   if (v.kind === 'handover') plan.handover[v.day] = value;
-  else if (v.kind === 'arrival') plan.days[v.day].arrivals[v.index] = value;
-  else plan.days[v.day].exits[v.index] = value;
+  else plan.days[v.day].times[v.index] = value;
 }
 
 /** Tercih edilen saatten sapmanin toplam bedeli (saat cinsinden mutlak sapma). */
@@ -297,58 +246,49 @@ export function planDeviationHours(plan, vars) {
 }
 
 /**
- * Plani, ay icindeki (ve kesisim hesabi icin komsu gunlerdeki) zaman
- * araliklarina cevirir. Donen her ogede baslangic/bitis, ayin basindan
- * itibaren dakika cinsindendir.
+ * Plani zaman araliklarina cevirir. Ay basindan itibaren dakika cinsinden.
+ * Kesisim hesabi icin komsu aylarin sinir gunleri de eklenir.
  */
 export function planIntervals(plan, days) {
   const P = plan.policy;
   const n = days.length;
   const out = [];
-  const sideOf = (i) => (days[Math.min(Math.max(i, 0), n - 1)].type === 'weekend' ? P.weekend : P.weekday);
 
-  const emit = (dayIndex, iso, dayType, k, h, hNext, arrivals, exits, labels, inMonth) => {
-    for (let i = 0; i < k; i += 1) {
-      const start = dayIndex * MIN_PER_DAY + (i === 0 ? h : arrivals[i - 1]);
-      const end = i === k - 1
-        ? (dayIndex + 1) * MIN_PER_DAY + hNext
-        : dayIndex * MIN_PER_DAY + exits[i];
+  const emit = (dayIndex, iso, dayType, pattern, h, hNext, times, inMonth) => {
+    const intervals = patternIntervals(pattern, h, hNext, times);
+    intervals.forEach((it, i) => {
       out.push({
         id: `${iso}#v${i + 1}`,
         date: iso,
         dayIndex,
         dayType,
         templateId: `v${i + 1}`,
-        label: labels[i],
-        startMin: start,
-        endMin: end,
+        patternId: pattern.id,
+        patternName: pattern.name,
+        label: it.label,
+        startMin: dayIndex * MIN_PER_DAY + it.start,
+        endMin: dayIndex * MIN_PER_DAY + it.end,
         inMonth,
       });
-    }
+    });
   };
 
   // Onceki ayin son gunu (yalnizca kesisim hesabi icin)
-  {
-    const s = sideOf(0);
-    emit(-1, days[0].prevIso, days[0].prevType || 'weekday', s.doctorsPerDay,
-      s.handover.preferred, plan.handover[0],
-      s.arrivals.map((a) => a.preferred), s.exits.map((e) => e.preferred), s.labels, false);
-  }
+  const first = plan.days[0];
+  emit(-1, days[0].prevIso, days[0].prevType || 'weekday', first.pattern,
+    P.handover.preferred, plan.handover[0],
+    Int32Array.from(first.pattern.vars.map((v) => v.preferred)), false);
 
   for (let d = 0; d < n; d += 1) {
-    const s = sideOf(d);
     const dp = plan.days[d];
-    emit(d, days[d].iso, days[d].type, dp.k, plan.handover[d], plan.handover[d + 1],
-      dp.arrivals, dp.exits, s.labels, true);
+    emit(d, days[d].iso, days[d].type, dp.pattern, plan.handover[d], plan.handover[d + 1], dp.times, true);
   }
 
-  // Sonraki ayin ilk gunu (yalnizca kesisim hesabi icin)
-  {
-    const s = sideOf(n - 1);
-    emit(n, days[n - 1].nextIso, days[n - 1].nextType || 'weekday', s.doctorsPerDay,
-      plan.handover[n], s.handover.preferred,
-      s.arrivals.map((a) => a.preferred), s.exits.map((e) => e.preferred), s.labels, false);
-  }
+  // Sonraki ayin ilk gunu
+  const last = plan.days[n - 1];
+  emit(n, days[n - 1].nextIso, days[n - 1].nextType || 'weekday', last.pattern,
+    plan.handover[n], P.handover.preferred,
+    Int32Array.from(last.pattern.vars.map((v) => v.preferred)), false);
 
   return out;
 }
