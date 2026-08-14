@@ -63,7 +63,12 @@ function rhythmTable(ws, rows) {
           }, String(v));
         }),
         gecmisVar && h('td', { class: 'num muted' }, String(gec?.shifts || 0)));
-    })));
+    })),
+    // Gecmis yoksa haftagunu sutunlari hic cizilmez; nedenini yazmazsak
+    // yonetici "ozellik calismiyor" sanir.
+    !gecmisVar && h('tfoot', null, h('tr', null, h('td', { colSpan: 3, class: 'small muted' },
+      'Haftagünü dağılımı, çizelgesi üretilmiş en az bir önceki ay olduğunda burada görünür. '
+      + 'Şu an geçmiş veri yok, bu yüzden çizelge üretilirken ritim yönlendirmesi devrede değil.'))));
 }
 
 export function renderBalance() {

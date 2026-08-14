@@ -37,7 +37,7 @@ node server/seed.js --demo    # 8 doktor, parolaları: nobet2026
 Testler:
 
 ```bash
-npm test                      # 89 test: motor, saat planı, kurallar, adalet ve uçtan uca API
+npm test                      # 94 test: motor, saat planı, kurallar, adalet ve uçtan uca API
 ```
 
 Kendi ortam ayarlarınız:
@@ -594,5 +594,6 @@ public/          Tarayıcı arayüzü (derleme adımı yok)
   state.js       Paylaşılan durum; görünümler kabuğa geri bağlanmaz
   demo-api.js    Sunucusuz demo için tarayıcı içi arka uç
 tools/           build-demo.js — tek dosyalık sunucusuz sürümü üretir
-test/            89 test — motor, saat planı, kurallar, adalet ve uçtan uca API
+                 (üretilen paket yazılmadan önce ayrıştırılır; bozuk paket asla yazılmaz)
+test/            94 test — motor, saat planı, kurallar, adalet ve uçtan uca API
 ```

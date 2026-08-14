@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRIES = ['public/js/demo-api.js', 'public/js/app.js'];
@@ -47,8 +48,40 @@ function transform(code, modulePath) {
     return `__req(${JSON.stringify(target)});`;
   });
 
-  // export { a, b as c };   (yeniden disa aktarim dahil)
-  out = out.replace(/^export\s*\{([\s\S]*?)\};?[ \t]*$/gm, (_, names) => {
+  // export * from './x.js'  -> desteklenmiyor, sessizce bozuk kod uretmesin
+  if (/^export\s+\*/m.test(out)) {
+    throw new Error(`${modulePath}: "export * from" desteklenmiyor; adlari tek tek yazin`);
+  }
+
+  // export { a, b as c } from './x.js';   (baska modulden yeniden disa aktarim)
+  //
+  // Bu bicim ayri ele ALINMALIDIR: asagidaki duz "export { ... }" kurali
+  // satirin sonundaki `from '...'` kismini goremez, esleme kayar ve ortaya
+  // ayrıstirilamayan kod cikar. Bir kez tam olarak bu oldu ve demo bos
+  // ekran acildi; bu yuzden hem bu kural hem de sonundaki dogrulama var.
+  out = out.replace(
+    /^export\s*\{([^{}]*?)\}\s*from\s*['"]([^'"]+)['"];?[ \t]*$/gm,
+    (_, names, spec) => {
+      const target = resolveSpec(spec, modulePath);
+      deps.push(target);
+      const parts = [];
+      for (const raw of names.split(',')) {
+        const n = raw.trim();
+        if (!n) continue;
+        const m = /^(\S+)\s+as\s+(\S+)$/.exec(n);
+        const from = m ? m[1] : n;
+        const to = m ? m[2] : n;
+        parts.push(from === to ? to : `${from}: ${to}`);
+        exported.add(to);
+      }
+      return `const { ${parts.join(', ')} } = __req(${JSON.stringify(target)});`;
+    },
+  );
+
+  // export { a, b as c };
+  // Not: `[^{}]` bilincli — cok satirli listeleri kapsar ama suslu parantez
+  // sinirini asip sonraki bloklari yutmaz.
+  out = out.replace(/^export\s*\{([^{}]*?)\};?[ \t]*$/gm, (_, names) => {
     for (const raw of names.split(',')) {
       const n = raw.trim();
       if (!n) continue;
@@ -216,6 +249,33 @@ document.getElementById('demo-reset').addEventListener('click', () => {
 });
 </script>
 `;
+
+/**
+ * Uretilen paketi YAZMADAN ONCE ayristir.
+ *
+ * Donusturme kurallari duzenli ifadelere dayaniyor; desteklenmeyen bir
+ * sozdizimi sessizce bozuk kod uretebilir. Bir kez tam olarak bu oldu:
+ * "export { x } from './y.js'" bicimi yanlis eslesti, paket ayristirilamaz
+ * hale geldi ve demo bombos bir ekran actı — uretici ise "hazir" dedi.
+ *
+ * Bu kontrol yalnizca ayristirmayi dogrular, calistirmaz; tarayici API'leri
+ * gerekmez. Hata varsa dosya hic yazilmaz.
+ */
+function assertParses(script) {
+  try {
+    new vm.Script(script, { filename: 'demo-bundle.js' });
+  } catch (err) {
+    const satirlar = script.split('\n');
+    const no = Number(/demo-bundle\.js:(\d+)/.exec(err.stack || '')?.[1]);
+    const baglam = Number.isFinite(no)
+      ? `\n\n${satirlar.slice(Math.max(0, no - 3), no + 2).map((l, i) => `${no - 2 + i}| ${l.slice(0, 160)}`).join('\n')}`
+      : '';
+    throw new Error(`Uretilen paket ayristirilamiyor: ${err.message}${baglam}`);
+  }
+}
+
+// type="module" olarak calisacagi icin ayni kapsamda dogrulanir.
+assertParses(`${loader}\n${body}\n(async () => {\n${boot}\n})();`);
 
 const outPath = process.argv[2] ? resolve(process.argv[2]) : join(root, 'demo', 'nobet-cizelgesi-demo.html');
 mkdirSync(dirname(outPath), { recursive: true });
